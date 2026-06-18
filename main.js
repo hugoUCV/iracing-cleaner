@@ -1,8 +1,7 @@
-const { app, BrowserWindow, ipcMain, shell, dialog, session, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, session, safeStorage, net } = require('electron');
 const path    = require('path');
 const fs      = require('fs');
 const os      = require('os');
-const https   = require('https');
 const crypto  = require('crypto');
 const { execSync } = require('child_process');
 
@@ -28,13 +27,19 @@ function irHashPw(email, pw) {
     .digest('base64');
 }
 
-// Petición HTTPS genérica (con soporte de redirect)
-function irRequest({ hostname, path: p, method = 'GET', headers = {}, body = null }) {
+// Petición usando el stack de red de Chromium (net de Electron)
+function irRequest({ url, method = 'GET', headers = {}, body = null }) {
   return new Promise((resolve, reject) => {
-    const req = https.request({ hostname, path: p, method, headers }, (res) => {
-      const chunks = [];
+    const req = net.request({ method, url, redirect: 'follow' });
+    for (const [k, v] of Object.entries(headers)) req.setHeader(k, v);
+    const chunks = [];
+    req.on('response', (res) => {
       res.on('data', c => chunks.push(c));
-      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString() }));
+      res.on('end', () => resolve({
+        status: res.statusCode,
+        headers: res.headers,
+        body: Buffer.concat(chunks).toString()
+      }));
     });
     req.on('error', reject);
     if (body) req.write(body);
@@ -42,11 +47,8 @@ function irRequest({ hostname, path: p, method = 'GET', headers = {}, body = nul
   });
 }
 
-async function irGet(url) {
-  const u = new URL(url);
-  const res = await irRequest({ hostname: u.hostname, path: u.pathname + u.search });
-  if ([301, 302, 307, 308].includes(res.status) && res.headers.location) return irGet(res.headers.location);
-  return res;
+function irGet(url) {
+  return irRequest({ url });
 }
 
 const IRACING_DOCS  = path.join(os.homedir(), 'Documents', 'iRacing');
@@ -583,17 +585,13 @@ ipcMain.handle('iracing:login', async (_, { email, password }) => {
   try {
     const body = JSON.stringify({ email, password: irHashPw(email, password) });
     const res = await irRequest({
-      hostname: 'members-ng.iracing.com',
-      path: '/auth',
+      url:    'https://members-ng.iracing.com/auth',
       method: 'POST',
       headers: {
-        'Content-Type':   'application/json',
-        'Content-Length':  Buffer.byteLength(body),
-        'User-Agent':     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept':         'application/json, text/plain, */*',
-        'Accept-Language':'en-US,en;q=0.9',
-        'Origin':         'https://members-ng.iracing.com',
-        'Referer':        'https://members-ng.iracing.com/',
+        'Content-Type':    'application/json',
+        'Content-Length':   Buffer.byteLength(body),
+        'Accept':          'application/json, text/plain, */*',
+        'Accept-Language': 'en-US,en;q=0.9',
       },
       body
     });
@@ -641,8 +639,7 @@ ipcMain.handle('iracing:fetch-assets', async (_, type) => {
   try {
     const ep   = type === 'tracks' ? '/data/track/assets' : '/data/car/assets';
     const res1 = await irRequest({
-      hostname: 'members-ng.iracing.com',
-      path: ep,
+      url:     `https://members-ng.iracing.com${ep}`,
       headers: { Cookie: iracingCookie }
     });
 
