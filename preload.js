@@ -65,7 +65,7 @@ contextBridge.exposeInMainWorld('api', {
     open:   (p) => ipcRenderer.invoke('install:open', p)
   },
   iracing: {
-    login:        (creds)  => ipcRenderer.invoke('iracing:login', creds),
+    login:        ()       => ipcRenderer.invoke('iracing:login'),
     logout:       ()       => ipcRenderer.invoke('iracing:logout'),
     status:       ()       => ipcRenderer.invoke('iracing:status'),
     fetchAssets:  (type)   => ipcRenderer.invoke('iracing:fetch-assets', type),

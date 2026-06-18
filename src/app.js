@@ -999,7 +999,7 @@ async function renderInstallUI() {
     <div class="ir-path-card">
       <div class="ir-path-text">${installPath}</div>
       ${loggedIn
-        ? `<div class="ir-account-ok">● ${status.email}</div>
+        ? `<div class="ir-account-ok">● ${status.name || status.email || 'Conectado'}</div>
            <button class="btn btn-xs btn-ghost" onclick="refreshImages()" title="Actualizar mapa de imágenes">↻ imgs</button>
            <button class="btn btn-xs btn-ghost" onclick="logoutIracing()">Salir</button>`
         : `<button class="btn btn-xs btn-ghost" onclick="openLogin()">Conectar iRacing →</button>`}
@@ -1162,78 +1162,59 @@ function buildLoginOverlay() {
   d.innerHTML = `
     <div class="note-box" style="width:340px;gap:16px">
       <div>
-        <h4 style="margin:0 0 4px">Cuenta iRacing</h4>
-        <div style="font-size:11px;color:var(--t2)">Conéctate para cargar imágenes reales de coches y pistas desde el CDN de iRacing</div>
+        <h4 style="margin:0 0 6px">Cuenta iRacing</h4>
+        <div style="font-size:12px;color:var(--t2);line-height:1.5">
+          Se abrirá la web de iRacing para que inicies sesión con tu cuenta.<br>
+          La ventana se cerrará automáticamente al conectarse.
+        </div>
       </div>
-      <div style="display:flex;flex-direction:column;gap:10px">
-        <input type="email"    id="login-email"    class="text-input" style="width:100%;box-sizing:border-box" placeholder="Email de iRacing" autocomplete="email">
-        <input type="password" id="login-password" class="text-input" style="width:100%;box-sizing:border-box" placeholder="Contraseña"       autocomplete="current-password">
-        <div id="login-error" style="font-size:11px;color:var(--red);display:none;padding:7px 10px;background:rgba(239,68,68,.1);border-radius:var(--r2);border:1px solid rgba(239,68,68,.2)"></div>
+      <div id="login-waiting" style="display:none;align-items:center;gap:10px;font-size:12px;color:var(--t2)">
+        <div class="spinner"></div>
+        Esperando login en iRacing…
       </div>
       <div class="note-box-footer">
-        <button class="btn btn-ghost btn-sm" onclick="closeLogin()">Cancelar</button>
-        <button class="btn btn-primary btn-sm" id="login-submit" onclick="submitLogin()">Conectar</button>
+        <button class="btn btn-ghost btn-sm" id="login-cancel-btn" onclick="closeLogin()">Cancelar</button>
+        <button class="btn btn-primary btn-sm" id="login-open-btn" onclick="connectIracing()">Abrir iRacing →</button>
       </div>
     </div>`;
-  d.addEventListener('keydown', e => {
-    if (e.key === 'Enter')  submitLogin();
-    if (e.key === 'Escape') closeLogin();
-  });
+  d.addEventListener('keydown', e => { if (e.key === 'Escape') closeLogin(); });
   document.body.appendChild(d);
 }
 
 function openLogin() {
   const o = eid('login-overlay');
   o.hidden = false;
-  eid('login-error').style.display = 'none';
-  eid('login-email').value = '';
-  eid('login-password').value = '';
-  setTimeout(() => eid('login-email').focus(), 50);
+  eid('login-waiting').style.display = 'none';
+  eid('login-open-btn').style.display = '';
 }
 
 function closeLogin() { eid('login-overlay').hidden = true; }
 
-async function submitLogin() {
-  const email    = eid('login-email').value.trim();
-  const password = eid('login-password').value;
-  const errEl    = eid('login-error');
-  const btn      = eid('login-submit');
+async function connectIracing() {
+  eid('login-open-btn').style.display = 'none';
+  eid('login-waiting').style.display = 'flex';
 
-  if (!email || !password) {
-    errEl.textContent = 'Rellena email y contraseña';
-    errEl.style.display = 'block';
-    return;
-  }
-
-  btn.textContent = 'Conectando…';
-  btn.disabled = true;
-  errEl.style.display = 'none';
-
-  const result = await api.iracing.login({ email, password });
-
-  if (!result.ok) {
-    const detail = result.raw ? `\n${result.raw}` : '';
-    errEl.textContent = (result.error || 'Error desconocido') + detail;
-    errEl.style.display = 'block';
-    btn.textContent = 'Conectar';
-    btn.disabled = false;
-    return;
-  }
+  const result = await api.iracing.login();
 
   closeLogin();
-  toast(`Conectado como ${result.email}`, 'success');
 
-  // Descarga el mapa de imágenes en segundo plano
+  if (!result.ok) {
+    if (result.error !== 'Ventana cerrada sin iniciar sesión') toast(result.error, 'error');
+    return;
+  }
+
+  const label = result.name || result.email || 'iRacing';
+  toast(`Conectado: ${label}`, 'success');
+
   Promise.all([
     api.iracing.fetchAssets('cars'),
     api.iracing.fetchAssets('tracks')
   ]).then(([r1, r2]) => {
     const count = (r1.count || 0) + (r2.count || 0);
-    toast(`${count} imágenes disponibles`, 'success');
+    if (count) toast(`${count} imágenes disponibles`, 'success');
     if (eid('view-install').classList.contains('active')) loadInstallTab(installActiveTab);
   });
 
-  // Recarga cabecera del install para mostrar el email conectado
   if (eid('view-install').classList.contains('active')) renderInstallUI();
 }
 

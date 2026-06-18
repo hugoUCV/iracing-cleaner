@@ -921,3 +921,10 @@ body {
 }
 .text-input:focus { border-color: var(--yellow); }
 .text-input::placeholder { color: var(--t3); }
+
+.spinner {
+  width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0;
+  border: 2px solid var(--b1); border-top-color: var(--yellow);
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }

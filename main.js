@@ -566,63 +566,64 @@ function guessTrack(filename) {
 
 // ── iRacing auth ─────────────────────────────────────────────────────────────
 
-ipcMain.handle('iracing:login', async (_, { email, password }) => {
-  let authWin = null;
-  try {
-    const pwHash  = irHashPw(email, password);
-    const payload = JSON.stringify(JSON.stringify({ email, password: pwHash }));
-
-    authWin = new BrowserWindow({
-      show: false,
+ipcMain.handle('iracing:login', () => {
+  return new Promise((resolve) => {
+    const authWin = new BrowserWindow({
+      width: 960, height: 720,
+      title: 'iRacing — Inicia sesión',
+      autoHideMenuBar: true,
       webPreferences: { session: session.defaultSession, nodeIntegration: false, contextIsolation: true }
     });
 
-    // Cargar la web de iRacing para establecer cookies de sesión
-    await authWin.loadURL('https://members-ng.iracing.com/');
+    authWin.loadURL('https://members-ng.iracing.com/');
 
-    // Hacer el POST desde el contexto real del navegador (mismo origen → sin restricciones)
-    const result = await authWin.webContents.executeJavaScript(`
-      fetch('/auth', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: ${payload},
-        credentials: 'include'
-      }).then(r => r.text().then(t => ({ status: r.status, body: t }))).catch(e => ({ error: e.message }))
-    `);
+    let done = false;
 
-    authWin.close();
-    authWin = null;
+    async function onCookieSet(event, cookie, cause, removed) {
+      if (done || removed || cookie.name !== 'irsso_membersv3') return;
+      if (!cookie.domain.includes('iracing.com')) return;
+      done = true;
+      session.defaultSession.cookies.removeListener('changed', onCookieSet);
+      iracingCookie = `irsso_membersv3=${cookie.value}`;
 
-    if (result.error) return { ok: false, error: `Fetch error: ${result.error}` };
-
-    const cookies = await session.defaultSession.cookies.get({
-      url: 'https://members-ng.iracing.com', name: 'irsso_membersv3'
-    });
-
-    if (!cookies.length) {
-      let msg = `Sin cookie (HTTP ${result.status})`;
+      // Intenta obtener el email/nombre del miembro
+      let memberInfo = {};
       try {
-        const j = JSON.parse(result.body);
-        if (j.message) msg = j.message;
-        if (j.verificationRequired) msg = 'iRacing pide verificación de email — revisa tu correo';
+        const r1 = await net.fetch('https://members-ng.iracing.com/data/member/info', {
+          headers: { Cookie: iracingCookie }
+        });
+        const d1 = JSON.parse(await r1.text());
+        if (d1.link) {
+          const r2 = await net.fetch(d1.link);
+          const d2 = JSON.parse(await r2.text());
+          memberInfo = { email: d2.email || '', name: d2.display_name || '' };
+        }
       } catch {}
-      return { ok: false, error: msg, raw: (result.body || '').slice(0, 300) };
+
+      const s = getSettings();
+      s.iracingAccount = memberInfo;
+      s.iracingCookie  = iracingCookie;
+      saveSettings(s);
+
+      setTimeout(() => { try { authWin.close(); } catch {} }, 400);
+      resolve({ ok: true, ...memberInfo });
     }
 
-    iracingCookie = `irsso_membersv3=${cookies[0].value}`;
-    const s = getSettings();
-    s.iracingAccount = { email };
-    s.iracingCookie  = iracingCookie;
-    saveSettings(s);
-    return { ok: true, email };
-  } catch (e) {
-    if (authWin) { try { authWin.close(); } catch {} }
-    return { ok: false, error: `Error: ${e.message}` };
-  }
+    session.defaultSession.cookies.on('changed', onCookieSet);
+
+    authWin.on('closed', () => {
+      session.defaultSession.cookies.removeListener('changed', onCookieSet);
+      if (!done) {
+        done = true;
+        resolve({ ok: false, error: 'Ventana cerrada sin iniciar sesión' });
+      }
+    });
+  });
 });
 
-ipcMain.handle('iracing:logout', () => {
+ipcMain.handle('iracing:logout', async () => {
   iracingCookie = null;
+  await session.defaultSession.cookies.remove('https://members-ng.iracing.com', 'irsso_membersv3').catch(() => {});
   const s = getSettings();
   delete s.iracingAccount;
   delete s.iracingCookie;
@@ -632,7 +633,11 @@ ipcMain.handle('iracing:logout', () => {
 
 ipcMain.handle('iracing:status', () => {
   const s = getSettings();
-  return { loggedIn: !!iracingCookie, email: s.iracingAccount?.email || null };
+  return {
+    loggedIn: !!iracingCookie,
+    email: s.iracingAccount?.email || null,
+    name:  s.iracingAccount?.name  || null
+  };
 });
 
 ipcMain.handle('iracing:fetch-assets', async (_, type) => {
