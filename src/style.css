@@ -898,3 +898,26 @@ body {
   display: flex; gap: 8px; align-items: center; padding-top: 14px;
   border-top: 1px solid var(--b1); flex-shrink: 0;
 }
+
+/* ── iRacing account / install path card ─────────────────────────────────── */
+.ir-path-card {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--s1); border: 1px solid var(--b1);
+  border-radius: var(--r); padding: 10px 16px; flex-shrink: 0;
+}
+.ir-path-text {
+  font-size: 11px; font-family: 'Cascadia Code','Consolas',monospace;
+  color: var(--t2); flex: 1; word-break: break-all; overflow: hidden;
+  white-space: nowrap; text-overflow: ellipsis;
+}
+.ir-account-ok { font-size: 11px; color: #22C55E; white-space: nowrap; }
+.btn-xs { font-size: 10px !important; padding: 3px 8px !important; height: auto !important; border-radius: 4px !important; }
+
+/* ── login overlay (reuses note-overlay base, adds text-input) ───────────── */
+.text-input {
+  background: var(--s2); border: 1px solid var(--b1); border-radius: var(--r2);
+  color: var(--t1); font-size: 12px; padding: 8px 10px; outline: none;
+  transition: border-color .15s;
+}
+.text-input:focus { border-color: var(--yellow); }
+.text-input::placeholder { color: var(--t3); }

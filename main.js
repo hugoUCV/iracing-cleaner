@@ -1,8 +1,52 @@
-const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
-const path = require('path');
-const fs = require('fs');
-const os = require('os');
+const { app, BrowserWindow, ipcMain, shell, dialog, session, safeStorage } = require('electron');
+const path    = require('path');
+const fs      = require('fs');
+const os      = require('os');
+const https   = require('https');
+const crypto  = require('crypto');
 const { execSync } = require('child_process');
+
+let iracingCookie = null;
+
+// Intercepta peticiones al CDN de iRacing y añade la cookie de sesión
+function setupCookieInterceptor() {
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: ['https://images-static.iracing.com/*'] },
+    (details, callback) => {
+      const headers = { ...details.requestHeaders };
+      if (iracingCookie) headers['Cookie'] = iracingCookie;
+      callback({ requestHeaders: headers });
+    }
+  );
+}
+
+// Hash requerido por iRacing: SHA-256(lower(pw) + lower(email)) → base64
+function irHashPw(email, pw) {
+  return crypto.createHash('sha256')
+    .update(pw.toLowerCase() + email.toLowerCase())
+    .digest('base64');
+}
+
+// Petición HTTPS genérica (con soporte de redirect)
+function irRequest({ hostname, path: p, method = 'GET', headers = {}, body = null }) {
+  return new Promise((resolve, reject) => {
+    const req = https.request({ hostname, path: p, method, headers }, (res) => {
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks).toString() }));
+    });
+    req.on('error', reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+async function irGet(url) {
+  const u = new URL(url);
+  const res = await irRequest({ hostname: u.hostname, path: u.pathname + u.search });
+  if ([301, 302, 307, 308].includes(res.status) && res.headers.location) return irGet(res.headers.location);
+  return res;
+}
 
 const IRACING_DOCS  = path.join(os.homedir(), 'Documents', 'iRacing');
 const PAINT_DIR     = path.join(IRACING_DOCS, 'paint');
@@ -43,6 +87,9 @@ function createWindow() {
 
 app.whenReady().then(() => {
   fs.mkdirSync(ud('config-backups'), { recursive: true });
+  const s = getSettings();
+  if (s.iracingCookie) iracingCookie = s.iracingCookie;
+  setupCookieInterceptor();
   createWindow();
 });
 app.on('window-all-closed', () => app.quit());
@@ -528,3 +575,100 @@ function guessTrack(filename) {
   const low = filename.toLowerCase();
   return known.find(t => low.includes(t.replace(' ',''))) || null;
 }
+
+// ── iRacing auth ─────────────────────────────────────────────────────────────
+
+ipcMain.handle('iracing:login', async (_, { email, password }) => {
+  try {
+    const body = JSON.stringify({
+      email,
+      password: irHashPw(email, password),
+      utcoffset: -(new Date().getTimezoneOffset()),
+      captchaword: ''
+    });
+    const res = await irRequest({
+      hostname: 'members-ng.iracing.com',
+      path: '/auth',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      body
+    });
+
+    const rawCookies = res.headers['set-cookie'] || [];
+    const cookieHdr  = rawCookies.find(c => c.includes('irsso_membersv3='));
+    if (!cookieHdr) {
+      let msg = 'Credenciales incorrectas';
+      try { const j = JSON.parse(res.body); if (j.message) msg = j.message; } catch {}
+      return { ok: false, error: msg };
+    }
+
+    iracingCookie = cookieHdr.split(';')[0];
+    const s = getSettings();
+    s.iracingAccount = { email };
+    s.iracingCookie  = iracingCookie;
+    saveSettings(s);
+    return { ok: true, email };
+  } catch (e) {
+    return { ok: false, error: `Error de red: ${e.message}` };
+  }
+});
+
+ipcMain.handle('iracing:logout', () => {
+  iracingCookie = null;
+  const s = getSettings();
+  delete s.iracingAccount;
+  delete s.iracingCookie;
+  saveSettings(s);
+  return true;
+});
+
+ipcMain.handle('iracing:status', () => {
+  const s = getSettings();
+  return { loggedIn: !!iracingCookie, email: s.iracingAccount?.email || null };
+});
+
+ipcMain.handle('iracing:fetch-assets', async (_, type) => {
+  if (!iracingCookie) return { ok: false, error: 'No autenticado' };
+  try {
+    const ep   = type === 'tracks' ? '/data/track/assets' : '/data/car/assets';
+    const res1 = await irRequest({
+      hostname: 'members-ng.iracing.com',
+      path: ep,
+      headers: { Cookie: iracingCookie }
+    });
+
+    // Maneja expiración de cookie
+    if (res1.status === 401 || res1.status === 403) {
+      iracingCookie = null;
+      return { ok: false, error: 'Sesión expirada — vuelve a conectar' };
+    }
+
+    const linkData = JSON.parse(res1.body);
+    if (!linkData.link) return { ok: false, error: 'API sin link — intenta de nuevo' };
+
+    const res2   = await irGet(linkData.link);
+    const assets = JSON.parse(res2.body);
+
+    const map = {};
+    for (const asset of Object.values(assets)) {
+      const folder = asset.folder;
+      if (!folder) continue;
+      let img = null;
+      if (type === 'tracks') {
+        img = asset.track_map || (asset.track_map_layers && asset.track_map_layers['0']) || null;
+      } else {
+        img = asset.small_image || asset.logo || null;
+      }
+      if (img) map[folder] = `https://images-static.iracing.com/${img}`;
+    }
+
+    saveJSON(ud(`${type}-images.json`), { map, ts: Date.now() });
+    return { ok: true, count: Object.keys(map).length };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('iracing:cached-assets', (_, type) => {
+  return loadJSON(ud(`${type}-images.json`), { map: {}, ts: 0 });
+});

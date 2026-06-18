@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   buildNoteOverlay();
   buildDetailPanel();
   buildCompareOverlay();
+  buildLoginOverlay();
   showView('overview');
 
   const acResult = await api.autoclean.runIfEnabled();
@@ -980,8 +981,11 @@ async function renderInstall() {
   renderInstallUI();
 }
 
-function renderInstallUI() {
+async function renderInstallUI() {
   const el = eid('view-install');
+  const status = await api.iracing.status();
+  const loggedIn = status.loggedIn;
+
   el.innerHTML = `
     <div class="page-header">
       <div><div class="page-title">Instalación</div><div class="page-subtitle">Contenido instalado en iRacing</div></div>
@@ -992,8 +996,13 @@ function renderInstallUI() {
       </div>
     </div>
 
-    <div class="card" style="padding:12px 18px">
-      <div style="font-size:11px;font-family:monospace;color:var(--t2);word-break:break-all">${installPath}</div>
+    <div class="ir-path-card">
+      <div class="ir-path-text">${installPath}</div>
+      ${loggedIn
+        ? `<div class="ir-account-ok">● ${status.email}</div>
+           <button class="btn btn-xs btn-ghost" onclick="refreshImages()" title="Actualizar mapa de imágenes">↻ imgs</button>
+           <button class="btn btn-xs btn-ghost" onclick="logoutIracing()">Salir</button>`
+        : `<button class="btn btn-xs btn-ghost" onclick="openLogin()">Conectar iRacing →</button>`}
     </div>
 
     <div class="tab-bar">
@@ -1013,7 +1022,11 @@ async function loadInstallTab(type) {
   if (!wrap) return;
   wrap.innerHTML = loading(`Escaneando ${type === 'cars' ? 'coches' : 'pistas'}…`);
 
-  const items = await api.install.scan({ installPath, type });
+  const [items, cached] = await Promise.all([
+    api.install.scan({ installPath, type }),
+    api.iracing.cachedAssets(type)
+  ]);
+  const imageMap = cached.map || {};
   const totalB = items.reduce((s,i) => s+i.bytes, 0);
 
   if (!items.length) {
@@ -1022,9 +1035,8 @@ async function loadInstallTab(type) {
   }
 
   const CDN = 'https://images-static.iracing.com/img';
-  const imgUrl = (id) => type === 'cars'
-    ? `${CDN}/cars/${id}/car_image.jpg`
-    : `${CDN}/tracks/${id}/track_map.png`;
+  const imgUrl = (id) => imageMap[id]
+    || (type === 'cars' ? `${CDN}/cars/${id}/car_image.jpg` : `${CDN}/tracks/${id}/track_map.png`);
 
   const initials = (label) => label.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '??';
   const PALETTE = ['#4B8EF5','#22C55E','#A855F7','#F59E0B','#EF4444','#06B6D4','#EC4899','#84CC16'];
@@ -1137,4 +1149,115 @@ function renderCompareBody(data) {
 function closeCompare() {
   const o = eid('compare-overlay');
   if (o) o.hidden = true;
+}
+
+// ── iRacing login ─────────────────────────────────────────────────────────────
+
+function buildLoginOverlay() {
+  if (eid('login-overlay')) return;
+  const d = document.createElement('div');
+  d.id = 'login-overlay';
+  d.className = 'note-overlay';
+  d.hidden = true;
+  d.innerHTML = `
+    <div class="note-box" style="width:340px;gap:16px">
+      <div>
+        <h4 style="margin:0 0 4px">Cuenta iRacing</h4>
+        <div style="font-size:11px;color:var(--t2)">Conéctate para cargar imágenes reales de coches y pistas desde el CDN de iRacing</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <input type="email"    id="login-email"    class="text-input" style="width:100%;box-sizing:border-box" placeholder="Email de iRacing" autocomplete="email">
+        <input type="password" id="login-password" class="text-input" style="width:100%;box-sizing:border-box" placeholder="Contraseña"       autocomplete="current-password">
+        <div id="login-error" style="font-size:11px;color:var(--red);display:none;padding:7px 10px;background:rgba(239,68,68,.1);border-radius:var(--r2);border:1px solid rgba(239,68,68,.2)"></div>
+      </div>
+      <div class="note-box-footer">
+        <button class="btn btn-ghost btn-sm" onclick="closeLogin()">Cancelar</button>
+        <button class="btn btn-primary btn-sm" id="login-submit" onclick="submitLogin()">Conectar</button>
+      </div>
+    </div>`;
+  d.addEventListener('keydown', e => {
+    if (e.key === 'Enter')  submitLogin();
+    if (e.key === 'Escape') closeLogin();
+  });
+  document.body.appendChild(d);
+}
+
+function openLogin() {
+  const o = eid('login-overlay');
+  o.hidden = false;
+  eid('login-error').style.display = 'none';
+  eid('login-email').value = '';
+  eid('login-password').value = '';
+  setTimeout(() => eid('login-email').focus(), 50);
+}
+
+function closeLogin() { eid('login-overlay').hidden = true; }
+
+async function submitLogin() {
+  const email    = eid('login-email').value.trim();
+  const password = eid('login-password').value;
+  const errEl    = eid('login-error');
+  const btn      = eid('login-submit');
+
+  if (!email || !password) {
+    errEl.textContent = 'Rellena email y contraseña';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  btn.textContent = 'Conectando…';
+  btn.disabled = true;
+  errEl.style.display = 'none';
+
+  const result = await api.iracing.login({ email, password });
+
+  if (!result.ok) {
+    errEl.textContent = result.error || 'Error desconocido';
+    errEl.style.display = 'block';
+    btn.textContent = 'Conectar';
+    btn.disabled = false;
+    return;
+  }
+
+  closeLogin();
+  toast(`Conectado como ${result.email}`, 'success');
+
+  // Descarga el mapa de imágenes en segundo plano
+  Promise.all([
+    api.iracing.fetchAssets('cars'),
+    api.iracing.fetchAssets('tracks')
+  ]).then(([r1, r2]) => {
+    const count = (r1.count || 0) + (r2.count || 0);
+    toast(`${count} imágenes disponibles`, 'success');
+    if (eid('view-install').classList.contains('active')) loadInstallTab(installActiveTab);
+  });
+
+  // Recarga cabecera del install para mostrar el email conectado
+  if (eid('view-install').classList.contains('active')) renderInstallUI();
+}
+
+async function logoutIracing() {
+  await api.iracing.logout();
+  toast('Sesión cerrada', 'info');
+  if (eid('view-install').classList.contains('active')) renderInstallUI();
+}
+
+async function refreshImages() {
+  const btn = event.target;
+  const orig = btn.textContent;
+  btn.textContent = '…';
+  btn.disabled = true;
+
+  const [r1, r2] = await Promise.all([
+    api.iracing.fetchAssets('cars'),
+    api.iracing.fetchAssets('tracks')
+  ]);
+
+  btn.textContent = orig;
+  btn.disabled = false;
+
+  if (!r1.ok) { toast(`Error: ${r1.error}`, 'error'); return; }
+  const count = (r1.count || 0) + (r2.count || 0);
+  toast(`${count} imágenes actualizadas`, 'success');
+  loadInstallTab(installActiveTab);
 }

@@ -64,6 +64,13 @@ contextBridge.exposeInMainWorld('api', {
     scan:   (params) => ipcRenderer.invoke('install:scan', params),
     open:   (p) => ipcRenderer.invoke('install:open', p)
   },
+  iracing: {
+    login:        (creds)  => ipcRenderer.invoke('iracing:login', creds),
+    logout:       ()       => ipcRenderer.invoke('iracing:logout'),
+    status:       ()       => ipcRenderer.invoke('iracing:status'),
+    fetchAssets:  (type)   => ipcRenderer.invoke('iracing:fetch-assets', type),
+    cachedAssets: (type)   => ipcRenderer.invoke('iracing:cached-assets', type)
+  },
   win: {
     minimize: () => ipcRenderer.send('win:minimize'),
     maximize: () => ipcRenderer.send('win:maximize'),
