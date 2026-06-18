@@ -567,34 +567,46 @@ function guessTrack(filename) {
 // ── iRacing auth ─────────────────────────────────────────────────────────────
 
 ipcMain.handle('iracing:login', async (_, { email, password }) => {
+  let authWin = null;
   try {
-    // Visita previa para establecer sesión (igual que un navegador real)
-    await net.fetch('https://members-ng.iracing.com/', { credentials: 'include' }).catch(() => {});
+    const pwHash  = irHashPw(email, password);
+    const payload = JSON.stringify(JSON.stringify({ email, password: pwHash }));
 
-    const res = await net.fetch('https://members-ng.iracing.com/auth', {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password: irHashPw(email, password) })
+    authWin = new BrowserWindow({
+      show: false,
+      webPreferences: { session: session.defaultSession, nodeIntegration: false, contextIsolation: true }
     });
-    const text = await res.text();
 
-    // Diagnóstico: muestra headers para saber qué dice el servidor
-    const allow = res.headers.get('allow') || res.headers.get('Allow') || '—';
+    // Cargar la web de iRacing para establecer cookies de sesión
+    await authWin.loadURL('https://members-ng.iracing.com/');
+
+    // Hacer el POST desde el contexto real del navegador (mismo origen → sin restricciones)
+    const result = await authWin.webContents.executeJavaScript(`
+      fetch('/auth', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: ${payload},
+        credentials: 'include'
+      }).then(r => r.text().then(t => ({ status: r.status, body: t }))).catch(e => ({ error: e.message }))
+    `);
+
+    authWin.close();
+    authWin = null;
+
+    if (result.error) return { ok: false, error: `Fetch error: ${result.error}` };
 
     const cookies = await session.defaultSession.cookies.get({
-      url:  'https://members-ng.iracing.com',
-      name: 'irsso_membersv3'
+      url: 'https://members-ng.iracing.com', name: 'irsso_membersv3'
     });
 
     if (!cookies.length) {
-      let msg = `Sin cookie (HTTP ${res.status}, Allow: ${allow})`;
+      let msg = `Sin cookie (HTTP ${result.status})`;
       try {
-        const j = JSON.parse(text);
+        const j = JSON.parse(result.body);
         if (j.message) msg = j.message;
         if (j.verificationRequired) msg = 'iRacing pide verificación de email — revisa tu correo';
       } catch {}
-      return { ok: false, error: msg, raw: text.slice(0, 300) };
+      return { ok: false, error: msg, raw: (result.body || '').slice(0, 300) };
     }
 
     iracingCookie = `irsso_membersv3=${cookies[0].value}`;
@@ -604,6 +616,7 @@ ipcMain.handle('iracing:login', async (_, { email, password }) => {
     saveSettings(s);
     return { ok: true, email };
   } catch (e) {
+    if (authWin) { try { authWin.close(); } catch {} }
     return { ok: false, error: `Error: ${e.message}` };
   }
 });
