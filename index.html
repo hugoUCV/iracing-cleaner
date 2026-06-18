@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+  <title>iRacing Cleaner</title>
+  <link rel="stylesheet" href="src/style.css">
+</head>
+<body>
+  <div id="titlebar">
+    <div id="titlebar-drag">
+      <span class="app-logo">◉</span>
+      <span class="app-name">iRacing Cleaner</span>
+    </div>
+    <div id="titlebar-controls">
+      <button onclick="api.win.minimize()">─</button>
+      <button onclick="api.win.maximize()">□</button>
+      <button class="close" onclick="api.win.close()">✕</button>
+    </div>
+  </div>
+
+  <div id="layout">
+    <nav id="sidebar">
+      <button class="nav-btn active" data-view="overview">
+        <span class="nav-icon">📊</span>
+        <span>Disco</span>
+      </button>
+      <button class="nav-btn" data-view="paint">
+        <span class="nav-icon">🎨</span>
+        <span>Skins</span>
+      </button>
+      <button class="nav-btn" data-view="telemetry">
+        <span class="nav-icon">📈</span>
+        <span>Telemetría</span>
+      </button>
+    </nav>
+
+    <main id="content">
+      <div id="view-overview" class="view active"></div>
+      <div id="view-paint" class="view"></div>
+      <div id="view-telemetry" class="view"></div>
+    </main>
+  </div>
+
+  <div id="toast-container"></div>
+
+  <script src="src/app.js"></script>
+</body>
+</html>

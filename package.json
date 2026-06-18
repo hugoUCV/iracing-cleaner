@@ -1,0 +1,26 @@
+{
+  "name": "iracing-cleaner",
+  "version": "0.1.0",
+  "description": "iRacing file manager: paint cleaner, telemetry manager, disk overview",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win --x64"
+  },
+  "build": {
+    "appId": "com.iracing.cleaner",
+    "productName": "iRacing Cleaner",
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "devDependencies": {
+    "electron": "^37.0.0",
+    "electron-builder": "^25.0.0"
+  }
+}
