@@ -1212,7 +1212,8 @@ async function submitLogin() {
   const result = await api.iracing.login({ email, password });
 
   if (!result.ok) {
-    errEl.textContent = result.error || 'Error desconocido';
+    const detail = result.raw ? `\n${result.raw}` : '';
+    errEl.textContent = (result.error || 'Error desconocido') + detail;
     errEl.style.display = 'block';
     btn.textContent = 'Conectar';
     btn.disabled = false;

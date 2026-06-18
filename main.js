@@ -581,26 +581,30 @@ function guessTrack(filename) {
 
 ipcMain.handle('iracing:login', async (_, { email, password }) => {
   try {
-    const body = JSON.stringify({
-      email,
-      password: irHashPw(email, password),
-      utcoffset: -(new Date().getTimezoneOffset()),
-      captchaword: ''
-    });
+    const body = JSON.stringify({ email, password: irHashPw(email, password) });
     const res = await irRequest({
       hostname: 'members-ng.iracing.com',
       path: '/auth',
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      headers: {
+        'Content-Type':  'application/json',
+        'Content-Length': Buffer.byteLength(body),
+        'User-Agent':    'Mozilla/5.0'
+      },
       body
     });
 
     const rawCookies = res.headers['set-cookie'] || [];
     const cookieHdr  = rawCookies.find(c => c.includes('irsso_membersv3='));
     if (!cookieHdr) {
-      let msg = 'Credenciales incorrectas';
-      try { const j = JSON.parse(res.body); if (j.message) msg = j.message; } catch {}
-      return { ok: false, error: msg };
+      // Devuelve el mensaje real de iRacing para facilitar el diagnóstico
+      let msg = `Sin cookie (HTTP ${res.status})`;
+      try {
+        const j = JSON.parse(res.body);
+        if (j.message) msg = j.message;
+        if (j.verificationRequired) msg = 'iRacing pide verificación de email antes de continuar';
+      } catch {}
+      return { ok: false, error: msg, raw: res.body.slice(0, 300) };
     }
 
     iracingCookie = cookieHdr.split(';')[0];
