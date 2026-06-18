@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' https://images-static.iracing.com data:;">
   <title>iRacing Cleaner</title>
   <link rel="stylesheet" href="src/style.css">
 </head>
@@ -21,18 +21,48 @@
 
   <div id="layout">
     <nav id="sidebar">
-      <button class="nav-btn active" data-view="overview"><span class="nav-icon">📊</span><span>Disco</span></button>
-      <button class="nav-btn" data-view="paint"><span class="nav-icon">🎨</span><span>Skins</span></button>
-      <button class="nav-btn" data-view="telemetry"><span class="nav-icon">📈</span><span>Telemetría</span></button>
-      <button class="nav-btn" data-view="replays"><span class="nav-icon">🎬</span><span>Replays</span></button>
+      <button class="nav-btn active" data-view="overview">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M22 12H2"/><path d="M5.45 5.11L2 12v6a2 2 0 002 2h16a2 2 0 002-2v-6l-3.45-6.89A2 2 0 0016.76 4H7.24a2 2 0 00-1.79 1.11z"/><circle cx="6" cy="16" r="1" fill="currentColor" stroke="none"/><circle cx="10" cy="16" r="1" fill="currentColor" stroke="none"/></svg></span>
+        <span>Disco</span>
+      </button>
+      <button class="nav-btn" data-view="paint">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg></span>
+        <span>Skins</span>
+      </button>
+      <button class="nav-btn" data-view="telemetry">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span>
+        <span>Telemetría</span>
+      </button>
+      <button class="nav-btn" data-view="replays">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8" fill="currentColor" stroke="none"/></svg></span>
+        <span>Replays</span>
+      </button>
       <div class="nav-sep"></div>
-      <button class="nav-btn" data-view="setups"><span class="nav-icon">🔧</span><span>Setups</span></button>
-      <button class="nav-btn" data-view="configs"><span class="nav-icon">💾</span><span>Configs</span></button>
-      <button class="nav-btn" data-view="crashes"><span class="nav-icon">💥</span><span>Crashes</span></button>
+      <button class="nav-btn" data-view="setups">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg></span>
+        <span>Setups</span>
+      </button>
+      <button class="nav-btn" data-view="configs">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/></svg></span>
+        <span>Configs</span>
+      </button>
+      <button class="nav-btn" data-view="crashes">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span>
+        <span>Crashes</span>
+      </button>
       <div class="nav-sep"></div>
-      <button class="nav-btn" data-view="auto"><span class="nav-icon">⚡</span><span>Auto</span></button>
-      <button class="nav-btn" data-view="install"><span class="nav-icon">💽</span><span>Install</span></button>
-      <button class="nav-btn" data-view="launch"><span class="nav-icon">🚀</span><span>Lanzar</span></button>
+      <button class="nav-btn" data-view="auto">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span>
+        <span>Auto</span>
+      </button>
+      <button class="nav-btn" data-view="install">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="8" y="8" width="8" height="8"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/></svg></span>
+        <span>Install</span>
+      </button>
+      <button class="nav-btn" data-view="launch">
+        <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 00-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 012-3.95A12.88 12.88 0 0122 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 01-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></svg></span>
+        <span>Lanzar</span>
+      </button>
     </nav>
 
     <main id="content">

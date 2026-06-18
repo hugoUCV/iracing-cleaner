@@ -1021,6 +1021,15 @@ async function loadInstallTab(type) {
     return;
   }
 
+  const CDN = 'https://images-static.iracing.com/img';
+  const imgUrl = (id) => type === 'cars'
+    ? `${CDN}/cars/${id}/car_image.jpg`
+    : `${CDN}/tracks/${id}/track_map.png`;
+
+  const initials = (label) => label.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '??';
+  const PALETTE = ['#4B8EF5','#22C55E','#A855F7','#F59E0B','#EF4444','#06B6D4','#EC4899','#84CC16'];
+  const colorFor = (id) => PALETTE[id.split('').reduce((s,c) => s + c.charCodeAt(0), 0) % PALETTE.length];
+
   wrap.innerHTML = `
     <div class="toolbar" style="justify-content:space-between">
       <span style="font-size:11px;color:var(--t2)">${items.length} ${type === 'cars' ? 'coches' : 'pistas'} instalados</span>
@@ -1029,8 +1038,15 @@ async function loadInstallTab(type) {
     <div style="flex:1;overflow-y:auto">
       ${items.map((item, i) => {
         const pct = totalB > 0 ? item.bytes / totalB * 100 : 0;
+        const init = initials(item.label);
+        const color = colorFor(item.id);
         return `
           <div class="install-row" data-path="${installPath}\\${type}\\${item.id}" onclick="api.install.open(this.dataset.path)">
+            <div class="install-thumb">
+              <img src="${imgUrl(item.id)}" alt="" loading="lazy"
+                onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+              <div class="install-initial" style="display:none;background:${color}20;color:${color};border:1px solid ${color}30">${init}</div>
+            </div>
             <div class="install-rank">${i+1}</div>
             <div class="install-info">
               <div class="install-name">${item.label}</div>
