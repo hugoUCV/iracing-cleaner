@@ -20,10 +20,11 @@ function setupCookieInterceptor() {
   );
 }
 
-// Hash requerido por iRacing: SHA-256(lower(pw) + lower(email)) → base64
+// Hash requerido por iRacing: SHA-256(password + lower(email)) → base64
+// El password va tal cual (case-sensitive); solo el email se pasa a minúsculas
 function irHashPw(email, pw) {
   return crypto.createHash('sha256')
-    .update(pw.toLowerCase() + email.toLowerCase())
+    .update(pw + email.toLowerCase())
     .digest('base64');
 }
 
