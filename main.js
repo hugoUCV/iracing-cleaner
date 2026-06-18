@@ -2,27 +2,38 @@ const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { execSync } = require('child_process');
 
-const IRACING_DOCS = path.join(os.homedir(), 'Documents', 'iRacing');
-const PAINT_DIR = path.join(IRACING_DOCS, 'paint');
+const IRACING_DOCS  = path.join(os.homedir(), 'Documents', 'iRacing');
+const PAINT_DIR     = path.join(IRACING_DOCS, 'paint');
 const TELEMETRY_DIR = path.join(IRACING_DOCS, 'telemetry');
-const REPLAY_DIR = path.join(IRACING_DOCS, 'replay');
-const SETUPS_DIR = path.join(IRACING_DOCS, 'setups');
-const LOGS_DIR = path.join(IRACING_DOCS, 'logs');
+const REPLAY_DIR    = path.join(IRACING_DOCS, 'replay');
+const SETUPS_DIR    = path.join(IRACING_DOCS, 'setups');
+const LOGS_DIR      = path.join(IRACING_DOCS, 'logs');
+const CRASH_DIR     = IRACING_DOCS;   // .dmp/.log viven en la raíz
+
+const CONFIG_FILES  = ['app.ini','camera.ini','controls.cfg','joyCalib.yaml','core.ini','rendererDX11.ini'];
 
 let win;
 
+// ── userData paths (lazy, sólo válidos tras app.whenReady) ───────────────────
+function ud(rel) { return path.join(app.getPath('userData'), rel); }
+
+function loadJSON(file, def = {}) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return def; }
+}
+function saveJSON(file, data) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(data, null, 2), 'utf8');
+}
+
+// ── window ───────────────────────────────────────────────────────────────────
 function createWindow() {
   win = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    minWidth: 900,
-    minHeight: 600,
-    frame: false,
-    backgroundColor: '#0f1117',
+    width: 1280, height: 820, minWidth: 960, minHeight: 640,
+    frame: false, backgroundColor: '#0f1117',
     webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
+      nodeIntegration: false, contextIsolation: true,
       preload: path.join(__dirname, 'preload.js')
     },
     icon: path.join(__dirname, 'assets', 'icon.png')
@@ -30,20 +41,21 @@ function createWindow() {
   win.loadFile('index.html');
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  fs.mkdirSync(ud('config-backups'), { recursive: true });
+  createWindow();
+});
 app.on('window-all-closed', () => app.quit());
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
 function dirStat(dirPath) {
   if (!fs.existsSync(dirPath)) return { exists: false, files: 0, bytes: 0 };
   let bytes = 0, files = 0;
   function walk(dir) {
-    let entries;
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    let entries; try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const e of entries) {
       const full = path.join(dir, e.name);
-      if (e.isDirectory()) { walk(full); }
+      if (e.isDirectory()) walk(full);
       else { try { bytes += fs.statSync(full).size; files++; } catch {} }
     }
   }
@@ -51,198 +63,309 @@ function dirStat(dirPath) {
   return { exists: true, files, bytes };
 }
 
-function formatBytes(b) {
-  if (b >= 1e9) return (b / 1e9).toFixed(1) + ' GB';
-  if (b >= 1e6) return (b / 1e6).toFixed(1) + ' MB';
-  if (b >= 1e3) return (b / 1e3).toFixed(1) + ' KB';
-  return b + ' B';
+function isOwnPaint(filename) {
+  const base = filename.replace(/\.\w+$/, '');
+  return /^(car|helmet|suit|car_spec|helmet_spec|suit_spec|sponsor\d*|decal\d*)$/i.test(base);
+}
+
+function carLabel(folderName) {
+  return folderName.replace(/([a-z])([A-Z0-9])/g,'$1 $2').replace(/([0-9])([a-z])/gi,'$1 $2')
+    .split(' ').map(w => w.charAt(0).toUpperCase()+w.slice(1)).join(' ').trim();
+}
+
+function parseIbtName(filename) {
+  const m = filename.match(/^(.+?)\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}-\d{2}-\d{2})\.ibt$/i);
+  if (m) return { car: m[1], date: m[2], time: m[3].replace(/-/g,':') };
+  return { car: filename.replace('.ibt',''), date: null, time: null };
 }
 
 // ── IPC: disk overview ────────────────────────────────────────────────────────
-
-ipcMain.handle('disk:overview', () => {
-  const folders = [
-    { key: 'paint',     label: 'Paint / Skins',   path: PAINT_DIR },
-    { key: 'telemetry', label: 'Telemetría',        path: TELEMETRY_DIR },
-    { key: 'replay',    label: 'Replays',           path: REPLAY_DIR },
-    { key: 'setups',    label: 'Setups',            path: SETUPS_DIR },
-    { key: 'logs',      label: 'Logs & Crashes',    path: LOGS_DIR },
-  ];
-  return folders.map(f => ({ ...f, ...dirStat(f.path) }));
-});
+ipcMain.handle('disk:overview', () => [
+  { key:'paint',     label:'Paint / Skins',  path: PAINT_DIR },
+  { key:'telemetry', label:'Telemetría',      path: TELEMETRY_DIR },
+  { key:'replay',    label:'Replays',         path: REPLAY_DIR },
+  { key:'setups',    label:'Setups',          path: SETUPS_DIR },
+  { key:'logs',      label:'Logs & Crashes',  path: LOGS_DIR },
+].map(f => ({ ...f, ...dirStat(f.path) })));
 
 // ── IPC: paint ────────────────────────────────────────────────────────────────
-
 ipcMain.handle('paint:list', () => {
   if (!fs.existsSync(PAINT_DIR)) return [];
-  const cars = fs.readdirSync(PAINT_DIR, { withFileTypes: true })
+  return fs.readdirSync(PAINT_DIR, { withFileTypes: true })
     .filter(e => e.isDirectory())
     .map(e => {
       const carPath = path.join(PAINT_DIR, e.name);
       let files = [];
       try {
-        files = fs.readdirSync(carPath, { withFileTypes: true })
-          .filter(f => f.isFile())
-          .map(f => {
-            const fp = path.join(carPath, f.name);
-            const stat = fs.statSync(fp);
-            return {
-              name: f.name,
-              bytes: stat.size,
-              mtime: stat.mtimeMs,
-              isOwn: isOwnPaint(f.name)
-            };
-          });
+        files = fs.readdirSync(carPath, { withFileTypes: true }).filter(f=>f.isFile()).map(f => {
+          const fp = path.join(carPath, f.name);
+          const st = fs.statSync(fp);
+          return { name: f.name, bytes: st.size, mtime: st.mtimeMs, isOwn: isOwnPaint(f.name) };
+        });
       } catch {}
-      const totalBytes = files.reduce((s, f) => s + f.bytes, 0);
-      const downloadedBytes = files.filter(f => !f.isOwn).reduce((s, f) => s + f.bytes, 0);
-      return {
-        id: e.name,
-        label: carLabel(e.name),
-        files: files.length,
-        bytes: totalBytes,
-        downloadedFiles: files.filter(f => !f.isOwn).length,
-        downloadedBytes,
-        ownFiles: files.filter(f => f.isOwn).length
-      };
-    })
-    .sort((a, b) => b.bytes - a.bytes);
-  return cars;
+      const totalBytes = files.reduce((s,f)=>s+f.bytes,0);
+      const dl = files.filter(f=>!f.isOwn);
+      return { id:e.name, label:carLabel(e.name), files:files.length, bytes:totalBytes,
+               downloadedFiles:dl.length, downloadedBytes:dl.reduce((s,f)=>s+f.bytes,0),
+               ownFiles:files.filter(f=>f.isOwn).length };
+    }).sort((a,b)=>b.bytes-a.bytes);
 });
 
 ipcMain.handle('paint:files', (_, carId) => {
   const carPath = path.join(PAINT_DIR, carId);
   if (!fs.existsSync(carPath)) return [];
-  return fs.readdirSync(carPath, { withFileTypes: true })
-    .filter(e => e.isFile())
-    .map(e => {
-      const fp = path.join(carPath, e.name);
-      const stat = fs.statSync(fp);
-      return { name: e.name, bytes: stat.size, mtime: stat.mtimeMs, isOwn: isOwnPaint(e.name) };
-    })
-    .sort((a, b) => b.bytes - a.bytes);
+  return fs.readdirSync(carPath,{withFileTypes:true}).filter(e=>e.isFile()).map(e => {
+    const fp = path.join(carPath, e.name); const st = fs.statSync(fp);
+    return { name:e.name, bytes:st.size, mtime:st.mtimeMs, isOwn:isOwnPaint(e.name) };
+  }).sort((a,b)=>b.bytes-a.bytes);
 });
 
-ipcMain.handle('paint:delete', async (_, { carId, files }) => {
-  const results = { deleted: 0, bytes: 0, errors: [] };
-  for (const name of files) {
-    const fp = path.join(PAINT_DIR, carId, name);
-    try {
-      const size = fs.statSync(fp).size;
-      fs.unlinkSync(fp);
-      results.deleted++;
-      results.bytes += size;
-    } catch (e) {
-      results.errors.push(name);
-    }
-  }
-  return results;
-});
+ipcMain.handle('paint:delete', (_, {carId, files}) => deleteFiles(files.map(n=>path.join(PAINT_DIR,carId,n))));
 
-ipcMain.handle('paint:delete-downloaded', async (_, carId) => {
+ipcMain.handle('paint:delete-downloaded', (_, carId) => {
   const carPath = path.join(PAINT_DIR, carId);
-  const results = { deleted: 0, bytes: 0, errors: [] };
-  if (!fs.existsSync(carPath)) return results;
-  const files = fs.readdirSync(carPath, { withFileTypes: true }).filter(e => e.isFile());
-  for (const f of files) {
-    if (!isOwnPaint(f.name)) {
-      const fp = path.join(carPath, f.name);
-      try {
-        const size = fs.statSync(fp).size;
-        fs.unlinkSync(fp);
-        results.deleted++;
-        results.bytes += size;
-      } catch { results.errors.push(f.name); }
-    }
-  }
-  return results;
+  if (!fs.existsSync(carPath)) return { deleted:0, bytes:0, errors:[] };
+  const files = fs.readdirSync(carPath,{withFileTypes:true}).filter(e=>e.isFile()&&!isOwnPaint(e.name)).map(e=>path.join(carPath,e.name));
+  return deleteFiles(files);
 });
 
-ipcMain.handle('paint:delete-all-downloaded', async () => {
-  if (!fs.existsSync(PAINT_DIR)) return { deleted: 0, bytes: 0, errors: [] };
-  const results = { deleted: 0, bytes: 0, errors: [] };
-  const cars = fs.readdirSync(PAINT_DIR, { withFileTypes: true }).filter(e => e.isDirectory());
-  for (const car of cars) {
-    const carPath = path.join(PAINT_DIR, car.name);
-    const files = fs.readdirSync(carPath, { withFileTypes: true }).filter(e => e.isFile());
-    for (const f of files) {
-      if (!isOwnPaint(f.name)) {
-        const fp = path.join(carPath, f.name);
-        try {
-          const size = fs.statSync(fp).size;
-          fs.unlinkSync(fp);
-          results.deleted++;
-          results.bytes += size;
-        } catch { results.errors.push(f.name); }
-      }
-    }
-  }
-  return results;
+ipcMain.handle('paint:delete-all-downloaded', () => {
+  if (!fs.existsSync(PAINT_DIR)) return { deleted:0, bytes:0, errors:[] };
+  const files = [];
+  fs.readdirSync(PAINT_DIR,{withFileTypes:true}).filter(e=>e.isDirectory()).forEach(car => {
+    const cp = path.join(PAINT_DIR, car.name);
+    try { fs.readdirSync(cp,{withFileTypes:true}).filter(e=>e.isFile()&&!isOwnPaint(e.name)).forEach(f=>files.push(path.join(cp,f.name))); } catch {}
+  });
+  return deleteFiles(files);
 });
 
 // ── IPC: telemetry ────────────────────────────────────────────────────────────
-
 ipcMain.handle('telemetry:list', () => {
   if (!fs.existsSync(TELEMETRY_DIR)) return [];
-  const files = fs.readdirSync(TELEMETRY_DIR, { withFileTypes: true })
-    .filter(e => e.isFile() && e.name.endsWith('.ibt'))
-    .map(e => {
-      const fp = path.join(TELEMETRY_DIR, e.name);
-      const stat = fs.statSync(fp);
-      const parsed = parseIbtName(e.name);
-      return { name: e.name, bytes: stat.size, mtime: stat.mtimeMs, ...parsed };
-    })
-    .sort((a, b) => b.mtime - a.mtime);
-  return files;
+  return fs.readdirSync(TELEMETRY_DIR,{withFileTypes:true})
+    .filter(e=>e.isFile()&&e.name.endsWith('.ibt'))
+    .map(e => { const fp=path.join(TELEMETRY_DIR,e.name); const st=fs.statSync(fp); return {name:e.name,bytes:st.size,mtime:st.mtimeMs,...parseIbtName(e.name)}; })
+    .sort((a,b)=>b.mtime-a.mtime);
+});
+ipcMain.handle('telemetry:delete', (_, files) => deleteFiles(files.map(n=>path.join(TELEMETRY_DIR,n))));
+ipcMain.handle('telemetry:open-folder', () => shell.openPath(TELEMETRY_DIR));
+
+// ── IPC: setups ───────────────────────────────────────────────────────────────
+ipcMain.handle('setups:cars', () => {
+  if (!fs.existsSync(SETUPS_DIR)) return [];
+  const notes = loadJSON(ud('setup-notes.json'));
+  return fs.readdirSync(SETUPS_DIR,{withFileTypes:true}).filter(e=>e.isDirectory()).map(e => {
+    const files = collectSetupFiles(path.join(SETUPS_DIR, e.name));
+    const carNotes = notes[e.name] || {};
+    const favs = files.filter(f => carNotes[f.name]?.fav).length;
+    return { id:e.name, label:carLabel(e.name), count:files.length, favs };
+  }).sort((a,b) => b.count - a.count);
 });
 
-ipcMain.handle('telemetry:delete', async (_, files) => {
-  const results = { deleted: 0, bytes: 0, errors: [] };
-  for (const name of files) {
-    const fp = path.join(TELEMETRY_DIR, name);
-    try {
-      const size = fs.statSync(fp).size;
-      fs.unlinkSync(fp);
-      results.deleted++;
-      results.bytes += size;
-    } catch { results.errors.push(name); }
+ipcMain.handle('setups:files', (_, carId) => {
+  const notes = loadJSON(ud('setup-notes.json'));
+  const carNotes = notes[carId] || {};
+  return collectSetupFiles(path.join(SETUPS_DIR, carId)).map(f => ({
+    ...f, note: carNotes[f.name]?.note || '', fav: !!carNotes[f.name]?.fav
+  }));
+});
+
+ipcMain.handle('setups:note', (_, {carId, file, note}) => {
+  const data = loadJSON(ud('setup-notes.json'));
+  if (!data[carId]) data[carId] = {};
+  if (!data[carId][file]) data[carId][file] = {};
+  data[carId][file].note = note;
+  saveJSON(ud('setup-notes.json'), data);
+  return true;
+});
+
+ipcMain.handle('setups:fav', (_, {carId, file}) => {
+  const data = loadJSON(ud('setup-notes.json'));
+  if (!data[carId]) data[carId] = {};
+  if (!data[carId][file]) data[carId][file] = {};
+  data[carId][file].fav = !data[carId][file].fav;
+  saveJSON(ud('setup-notes.json'), data);
+  return data[carId][file].fav;
+});
+
+ipcMain.handle('setups:delete', (_, {carId, files}) =>
+  deleteFiles(files.map(n => path.join(SETUPS_DIR, carId, n))));
+
+ipcMain.handle('setups:open-folder', (_, carId) =>
+  shell.openPath(path.join(SETUPS_DIR, carId)));
+
+// ── IPC: config backup ────────────────────────────────────────────────────────
+ipcMain.handle('config:files', () =>
+  CONFIG_FILES.map(name => {
+    const fp = path.join(IRACING_DOCS, name);
+    try { const st = fs.statSync(fp); return { name, exists:true, bytes:st.size, mtime:st.mtimeMs }; }
+    catch { return { name, exists:false, bytes:0, mtime:0 }; }
+  })
+);
+
+ipcMain.handle('config:backup', (_, name) => {
+  const id = new Date().toISOString().replace(/[:.]/g,'-').slice(0,19);
+  const dir = ud(`config-backups/${id}`);
+  fs.mkdirSync(dir, { recursive:true });
+  let size = 0;
+  const saved = [];
+  for (const fname of CONFIG_FILES) {
+    const src = path.join(IRACING_DOCS, fname);
+    if (fs.existsSync(src)) {
+      const bytes = fs.statSync(src).size;
+      fs.copyFileSync(src, path.join(dir, fname));
+      saved.push(fname); size += bytes;
+    }
   }
-  return results;
+  const meta = loadJSON(ud('config-backups/index.json'), { backups:[] });
+  meta.backups.unshift({ id, name: name||`Backup ${new Date().toLocaleString('es-ES')}`, date:Date.now(), size, files:saved });
+  saveJSON(ud('config-backups/index.json'), meta);
+  return { id, size, files:saved };
 });
 
-ipcMain.handle('telemetry:open-folder', () => {
-  shell.openPath(TELEMETRY_DIR);
+ipcMain.handle('config:backups', () => loadJSON(ud('config-backups/index.json'), { backups:[] }).backups);
+
+ipcMain.handle('config:restore', (_, id) => {
+  const dir = ud(`config-backups/${id}`);
+  if (!fs.existsSync(dir)) return { ok:false, error:'Backup no encontrado' };
+  const restored = [];
+  for (const fname of fs.readdirSync(dir)) {
+    const dst = path.join(IRACING_DOCS, fname);
+    fs.copyFileSync(path.join(dir, fname), dst);
+    restored.push(fname);
+  }
+  return { ok:true, files:restored };
 });
 
-// ── IPC: window controls ──────────────────────────────────────────────────────
+ipcMain.handle('config:backup-delete', (_, id) => {
+  const dir = ud(`config-backups/${id}`);
+  if (fs.existsSync(dir)) fs.rmSync(dir, { recursive:true, force:true });
+  const meta = loadJSON(ud('config-backups/index.json'), { backups:[] });
+  meta.backups = meta.backups.filter(b => b.id !== id);
+  saveJSON(ud('config-backups/index.json'), meta);
+  return true;
+});
 
+// ── IPC: crashes ──────────────────────────────────────────────────────────────
+ipcMain.handle('crashes:list', () => {
+  if (!fs.existsSync(CRASH_DIR)) return [];
+  const entries = fs.readdirSync(CRASH_DIR, { withFileTypes:true }).filter(e=>e.isFile());
+  const dmps = entries.filter(e=>e.name.endsWith('.dmp'));
+  return dmps.map(e => {
+    const base = e.name.replace('.dmp','');
+    const logName = base + '.log';
+    const dmpPath = path.join(CRASH_DIR, e.name);
+    const logPath = path.join(CRASH_DIR, logName);
+    const st = fs.statSync(dmpPath);
+    const logExists = fs.existsSync(logPath);
+    return {
+      base, dmp:e.name, log: logExists ? logName : null,
+      bytes: st.size + (logExists ? fs.statSync(logPath).size : 0),
+      mtime: st.mtimeMs
+    };
+  }).sort((a,b)=>b.mtime-a.mtime);
+});
+
+ipcMain.handle('crashes:read-log', (_, logName) => {
+  const fp = path.join(CRASH_DIR, logName);
+  if (!fs.existsSync(fp)) return '';
+  const lines = fs.readFileSync(fp,'utf8').split('\n');
+  return lines.slice(0, 80).join('\n');
+});
+
+ipcMain.handle('crashes:delete', (_, files) => deleteFiles(files.map(n=>path.join(CRASH_DIR,n))));
+
+// ── IPC: replays ──────────────────────────────────────────────────────────────
+ipcMain.handle('replays:list', () => {
+  if (!fs.existsSync(REPLAY_DIR)) return [];
+  return fs.readdirSync(REPLAY_DIR, { withFileTypes:true })
+    .filter(e=>e.isFile())
+    .map(e => {
+      const fp = path.join(REPLAY_DIR, e.name);
+      const st = fs.statSync(fp);
+      const m = e.name.match(/^(.+?)\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}-\d{2}-\d{2})/i);
+      return { name:e.name, bytes:st.size, mtime:st.mtimeMs,
+               session: m?.[1] || e.name, date:m?.[2]||null, time:m?.[3]||null };
+    }).sort((a,b)=>b.mtime-a.mtime);
+});
+ipcMain.handle('replays:delete', (_, files) => deleteFiles(files.map(n=>path.join(REPLAY_DIR,n))));
+ipcMain.handle('replays:open-folder', () => shell.openPath(REPLAY_DIR));
+
+// ── IPC: quick launch ─────────────────────────────────────────────────────────
+const KNOWN_APPS = [
+  { id:'iracing-ui',  label:'iRacing UI',       icon:'🏎',  paths:['C:\\iRacing\\iRacingUI.exe','D:\\iRacing\\iRacingUI.exe'] },
+  { id:'iracing-sim', label:'iRacing Sim',       icon:'🏁',  paths:['C:\\iRacing\\iracingsim64DX11.exe','D:\\iRacing\\iracingsim64DX11.exe'] },
+  { id:'simhub',      label:'SimHub',            icon:'📊',  paths:['C:\\Program Files\\SimHub\\SimHubWPF.exe','C:\\Users\\'+os.userInfo().username+'\\AppData\\Local\\SimHub\\SimHubWPF.exe'] },
+  { id:'tradingpaints',label:'Trading Paints',   icon:'🎨',  paths:['C:\\Users\\'+os.userInfo().username+'\\AppData\\Local\\Programs\\TradingPaints\\Trading Paints.exe'] },
+  { id:'moza',        label:'MOZA Pit House',    icon:'🎮',  paths:['C:\\Program Files\\MOZA\\MOZA Pit House\\MOZA Pit House.exe'] },
+  { id:'corner-coach',label:'Corner Coach',      icon:'📈',  paths:['C:\\Users\\'+os.userInfo().username+'\\Documents\\iracing-corner-coach\\node_modules\\electron\\dist\\electron.exe'] },
+  { id:'manager',     label:'iRacing Manager',   icon:'📅',  paths:['C:\\Users\\'+os.userInfo().username+'\\Documents\\iracing-manager\\node_modules\\electron\\dist\\electron.exe'] },
+  { id:'livery',      label:'Livery Creator',    icon:'🖌',  paths:['C:\\Users\\'+os.userInfo().username+'\\Documents\\iracing-livery-creator\\node_modules\\electron\\dist\\electron.exe'] },
+  { id:'photo-tool',  label:'Photo Tool',        icon:'📷',  paths:['C:\\Users\\'+os.userInfo().username+'\\Documents\\iracing-photo-tool\\node_modules\\electron\\dist\\electron.exe'] },
+];
+
+ipcMain.handle('launch:apps', () =>
+  KNOWN_APPS.map(a => ({
+    ...a,
+    exePath: a.paths.find(p=>fs.existsSync(p)) || null,
+    available: a.paths.some(p=>fs.existsSync(p))
+  }))
+);
+
+ipcMain.handle('launch:exec', (_, {exePath, cwd}) => {
+  if (!exePath || !fs.existsSync(exePath)) return { ok:false };
+  try {
+    const { spawn } = require('child_process');
+    const workDir = cwd || path.dirname(exePath);
+    spawn(exePath, [], { detached:true, stdio:'ignore', cwd:workDir }).unref();
+    return { ok:true };
+  } catch(e) { return { ok:false, error:e.message }; }
+});
+
+ipcMain.handle('launch:iracing-site', () => shell.openExternal('https://members.iracing.com'));
+ipcMain.handle('launch:open-folder', (_, p) => shell.openPath(p));
+
+// ── IPC: win controls ─────────────────────────────────────────────────────────
 ipcMain.on('win:minimize', () => win?.minimize());
 ipcMain.on('win:maximize', () => win?.isMaximized() ? win.unmaximize() : win.maximize());
 ipcMain.on('win:close', () => win?.close());
 
 // ── helpers privados ──────────────────────────────────────────────────────────
-
-function isOwnPaint(filename) {
-  // iRacing usa car_{custId}.tga para skins descargadas.
-  // Los archivos "propios" son car.tga / car_spec.tga / helmet.tga / suit.tga
-  const base = filename.replace(/\.\w+$/, '');
-  const ownPatterns = /^(car|helmet|suit|car_spec|helmet_spec|suit_spec|sponsor\d*|decal\d*)$/i;
-  return ownPatterns.test(base);
+function deleteFiles(paths) {
+  const r = { deleted:0, bytes:0, errors:[] };
+  for (const fp of paths) {
+    try { const sz = fs.statSync(fp).size; fs.unlinkSync(fp); r.deleted++; r.bytes+=sz; }
+    catch { r.errors.push(path.basename(fp)); }
+  }
+  return r;
 }
 
-function carLabel(folderName) {
-  return folderName
-    .replace(/([a-z])([A-Z0-9])/g, '$1 $2')
-    .replace(/([0-9])([a-z])/gi, '$1 $2')
-    .split(' ')
-    .map(w => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(' ')
-    .trim();
+function collectSetupFiles(dirPath) {
+  if (!fs.existsSync(dirPath)) return [];
+  const files = [];
+  function walk(dir, rel) {
+    try {
+      for (const e of fs.readdirSync(dir,{withFileTypes:true})) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) { walk(full, rel ? `${rel}/${e.name}` : e.name); }
+        else if (e.name.endsWith('.sto') || e.name.endsWith('.htm')) {
+          const st = fs.statSync(full);
+          files.push({ name:e.name, rel: rel ? `${rel}/${e.name}` : e.name,
+                       bytes:st.size, mtime:st.mtimeMs, track:guessTrack(e.name) });
+        }
+      }
+    } catch {}
+  }
+  walk(dirPath, '');
+  return files.sort((a,b)=>b.mtime-a.mtime);
 }
 
-function parseIbtName(filename) {
-  // formato típico: "car track YYYY-MM-DD HH-MM-SS.ibt"
-  const m = filename.match(/^(.+?)\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}-\d{2}-\d{2})\.ibt$/i);
-  if (m) return { car: m[1], date: m[2], time: m[3].replace(/-/g, ':') };
-  return { car: filename.replace('.ibt', ''), date: null, time: null };
+function guessTrack(filename) {
+  const known = ['spa','silverstone','monza','nurburgring','le mans','lemans','daytona','sebring',
+    'watkins glen','imola','barcelona','zandvoort','brands hatch','interlagos','bahrain','mount panorama',
+    'bathurst','fuji','suzuka','laguna seca','okayama','long beach','road america','road atlanta',
+    'virginia','lime rock','sonoma','mid ohio','mosport','mosport','charlotte','talladega','dover',
+    'phoenix','bristol','michigan','pocono','iowa','richmond','martinsville','kentucky','chicago'];
+  const low = filename.toLowerCase();
+  return known.find(t => low.includes(t.replace(' ',''))) || null;
 }

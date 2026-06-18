@@ -21,29 +21,31 @@
 
   <div id="layout">
     <nav id="sidebar">
-      <button class="nav-btn active" data-view="overview">
-        <span class="nav-icon">📊</span>
-        <span>Disco</span>
-      </button>
-      <button class="nav-btn" data-view="paint">
-        <span class="nav-icon">🎨</span>
-        <span>Skins</span>
-      </button>
-      <button class="nav-btn" data-view="telemetry">
-        <span class="nav-icon">📈</span>
-        <span>Telemetría</span>
-      </button>
+      <button class="nav-btn active" data-view="overview"><span class="nav-icon">📊</span><span>Disco</span></button>
+      <button class="nav-btn" data-view="paint"><span class="nav-icon">🎨</span><span>Skins</span></button>
+      <button class="nav-btn" data-view="telemetry"><span class="nav-icon">📈</span><span>Telemetría</span></button>
+      <button class="nav-btn" data-view="replays"><span class="nav-icon">🎬</span><span>Replays</span></button>
+      <div class="nav-sep"></div>
+      <button class="nav-btn" data-view="setups"><span class="nav-icon">🔧</span><span>Setups</span></button>
+      <button class="nav-btn" data-view="configs"><span class="nav-icon">💾</span><span>Configs</span></button>
+      <button class="nav-btn" data-view="crashes"><span class="nav-icon">💥</span><span>Crashes</span></button>
+      <div class="nav-sep"></div>
+      <button class="nav-btn" data-view="launch"><span class="nav-icon">🚀</span><span>Lanzar</span></button>
     </nav>
 
     <main id="content">
-      <div id="view-overview" class="view active"></div>
-      <div id="view-paint" class="view"></div>
+      <div id="view-overview"  class="view active"></div>
+      <div id="view-paint"     class="view"></div>
       <div id="view-telemetry" class="view"></div>
+      <div id="view-replays"   class="view"></div>
+      <div id="view-setups"    class="view"></div>
+      <div id="view-configs"   class="view"></div>
+      <div id="view-crashes"   class="view"></div>
+      <div id="view-launch"    class="view"></div>
     </main>
   </div>
 
   <div id="toast-container"></div>
-
   <script src="src/app.js"></script>
 </body>
 </html>
