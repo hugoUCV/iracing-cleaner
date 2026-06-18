@@ -27,28 +27,13 @@ function irHashPw(email, pw) {
     .digest('base64');
 }
 
-// Petición usando el stack de red de Chromium (net de Electron)
-function irRequest({ url, method = 'GET', headers = {}, body = null }) {
-  return new Promise((resolve, reject) => {
-    const req = net.request({ method, url, redirect: 'follow' });
-    for (const [k, v] of Object.entries(headers)) req.setHeader(k, v);
-    const chunks = [];
-    req.on('response', (res) => {
-      res.on('data', c => chunks.push(c));
-      res.on('end', () => resolve({
-        status: res.statusCode,
-        headers: res.headers,
-        body: Buffer.concat(chunks).toString()
-      }));
-    });
-    req.on('error', reject);
-    if (body) req.write(body);
-    req.end();
+// Petición GET autenticada usando net.fetch (Chromium, con cookie jar de sesión)
+async function irGet(url) {
+  const res = await net.fetch(url, {
+    headers: iracingCookie ? { Cookie: iracingCookie } : {}
   });
-}
-
-function irGet(url) {
-  return irRequest({ url });
+  const body = await res.text();
+  return { status: res.status, body };
 }
 
 const IRACING_DOCS  = path.join(os.homedir(), 'Documents', 'iRacing');
@@ -583,39 +568,37 @@ function guessTrack(filename) {
 
 ipcMain.handle('iracing:login', async (_, { email, password }) => {
   try {
-    const body = JSON.stringify({ email, password: irHashPw(email, password) });
-    const res = await irRequest({
-      url:    'https://members-ng.iracing.com/auth',
+    const res = await net.fetch('https://members-ng.iracing.com/auth', {
       method: 'POST',
-      headers: {
-        'Content-Type':    'application/json',
-        'Accept':          'application/json, text/plain, */*',
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
-      body
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: irHashPw(email, password) })
+    });
+    const text = await res.text();
+
+    // net.fetch almacena cookies en el jar de sesión de Chromium automáticamente
+    const cookies = await session.defaultSession.cookies.get({
+      url:  'https://members-ng.iracing.com',
+      name: 'irsso_membersv3'
     });
 
-    const rawCookies = res.headers['set-cookie'] || [];
-    const cookieHdr  = rawCookies.find(c => c.includes('irsso_membersv3='));
-    if (!cookieHdr) {
-      // Devuelve el mensaje real de iRacing para facilitar el diagnóstico
+    if (!cookies.length) {
       let msg = `Sin cookie (HTTP ${res.status})`;
       try {
-        const j = JSON.parse(res.body);
+        const j = JSON.parse(text);
         if (j.message) msg = j.message;
-        if (j.verificationRequired) msg = 'iRacing pide verificación de email antes de continuar';
+        if (j.verificationRequired) msg = 'iRacing pide verificación de email — revisa tu correo';
       } catch {}
-      return { ok: false, error: msg, raw: res.body.slice(0, 300) };
+      return { ok: false, error: msg, raw: text.slice(0, 300) };
     }
 
-    iracingCookie = cookieHdr.split(';')[0];
+    iracingCookie = `irsso_membersv3=${cookies[0].value}`;
     const s = getSettings();
     s.iracingAccount = { email };
     s.iracingCookie  = iracingCookie;
     saveSettings(s);
     return { ok: true, email };
   } catch (e) {
-    return { ok: false, error: `Error de red: ${e.message}` };
+    return { ok: false, error: `Error: ${e.message}` };
   }
 });
 
@@ -637,10 +620,7 @@ ipcMain.handle('iracing:fetch-assets', async (_, type) => {
   if (!iracingCookie) return { ok: false, error: 'No autenticado' };
   try {
     const ep   = type === 'tracks' ? '/data/track/assets' : '/data/car/assets';
-    const res1 = await irRequest({
-      url:     `https://members-ng.iracing.com${ep}`,
-      headers: { Cookie: iracingCookie }
-    });
+    const res1 = await irGet(`https://members-ng.iracing.com${ep}`);
 
     // Maneja expiración de cookie
     if (res1.status === 401 || res1.status === 403) {
