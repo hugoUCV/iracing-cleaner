@@ -3,12 +3,20 @@ let paintData = [], telemetryData = [], replayData = [], setupCars = [], setupFi
 let selectedSetupCar = null, activeCrash = null;
 
 // ── init ───────────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   setupNav();
   buildProgressOverlay();
   buildNoteOverlay();
   buildDetailPanel();
+  buildCompareOverlay();
   showView('overview');
+
+  const acResult = await api.autoclean.runIfEnabled();
+  if (acResult) {
+    let deleted = 0, bytes = 0;
+    for (const r of Object.values(acResult)) { deleted += r.deleted || 0; bytes += r.bytes || 0; }
+    if (deleted > 0) toast(`⚡ Auto-limpieza: ${deleted} archivos · ${fmtB(bytes)} liberados`, 'success');
+  }
 });
 
 function setupNav() {
@@ -25,8 +33,12 @@ function showView(name) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById(`view-${name}`).classList.add('active');
   closeDetail();
-  ({ overview, paint: renderPaint, telemetry: renderTelemetry, replays: renderReplays,
-     setups: renderSetups, configs: renderConfigs, crashes: renderCrashes, launch: renderLaunch })[name]?.();
+  closeCompare();
+  ({
+    overview, paint: renderPaint, telemetry: renderTelemetry, replays: renderReplays,
+    setups: renderSetups, configs: renderConfigs, crashes: renderCrashes, launch: renderLaunch,
+    auto: renderAutoClean, install: renderInstall
+  })[name]?.();
 }
 
 function navTo(view) {
@@ -480,16 +492,24 @@ function renderSetupFiles(car, files) {
     </div>
     <div id="setup-sel-bar" class="sel-toolbar hidden" style="margin:10px 14px;border-radius:var(--r)">
       <span class="sel-info" id="setup-sel-info"></span>
+      <button class="btn btn-ghost btn-sm" id="setup-compare-btn" style="display:none" onclick="openSetupCompare()">⚖ Comparar</button>
       <button class="btn btn-danger btn-sm" onclick="deleteSelSetups()">Borrar selección</button>
     </div>`;
 }
 
 function onSetupCheck() {
-  const n   = document.querySelectorAll('.setup-row input:checked').length;
+  const names = [...document.querySelectorAll('.setup-row input:checked')].map(b => b.dataset.name);
+  const n = names.length;
   const bar = eid('setup-sel-bar'), info = eid('setup-sel-info');
   if (!bar) return;
-  if (n) { bar.classList.remove('hidden'); info.innerHTML = `<strong>${n}</strong> seleccionados`; }
-  else bar.classList.add('hidden');
+  if (n) {
+    bar.classList.remove('hidden');
+    if (info) info.innerHTML = `<strong>${n}</strong> seleccionados`;
+    const cmpBtn = eid('setup-compare-btn');
+    if (cmpBtn) cmpBtn.style.display = n === 2 ? 'inline-flex' : 'none';
+  } else {
+    bar.classList.add('hidden');
+  }
 }
 
 async function toggleFav(carId, file) {
@@ -780,3 +800,325 @@ const fmtB    = b  => b >= 1e9 ? (b/1e9).toFixed(1)+' GB' : b >= 1e6 ? (b/1e6).t
 const fmtDate = ms => new Date(ms).toLocaleDateString('es-ES', { day:'2-digit', month:'short', year:'numeric' });
 const loading  = msg => `<div class="loading"><div class="spinner"></div>${msg}</div>`;
 const emptyState = (icon, msg) => `<div class="empty"><div class="empty-icon">${icon}</div><div class="empty-text">${msg}</div></div>`;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// AUTO-CLEANUP
+// ═══════════════════════════════════════════════════════════════════════════════
+async function renderAutoClean() {
+  const el = eid('view-auto');
+  el.innerHTML = loading('Cargando ajustes…');
+  const settings = await api.settings.get();
+  const ac = settings.autoClean || { enabled: false, telemetryDays: 30, paintDays: 14, replayDays: 0 };
+
+  el.innerHTML = `
+    <div class="page-header">
+      <div><div class="page-title">Auto-Limpieza</div><div class="page-subtitle">Elimina archivos viejos automáticamente al abrir la app</div></div>
+      <div class="header-actions">
+        <button class="btn btn-ghost" onclick="previewAutoClean()">Ver previsualización</button>
+        <button class="btn btn-primary" onclick="saveAutoClean()">Guardar</button>
+        <button class="btn btn-danger" onclick="runAutoCleanNow()">Limpiar ahora</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="settings-row">
+        <div class="settings-row-info">
+          <div class="settings-row-title">Activar auto-limpieza al iniciar</div>
+          <div class="settings-row-sub">Al abrir la app, borra automáticamente los archivos que superen el límite configurado — una vez al día como máximo</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="ac-enabled" ${ac.enabled ? 'checked' : ''}>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="ac-grid">
+      <div class="card">
+        <div class="card-title">Telemetría (.ibt)</div>
+        <div class="ac-row">
+          <span class="ac-label">Borrar archivos más antiguos de</span>
+          <div class="ac-days-input">
+            <input type="number" id="ac-tel-days" class="days-input" min="0" max="999" value="${ac.telemetryDays || 0}">
+            <span class="ac-days-unit">días</span>
+          </div>
+        </div>
+        <div class="ac-hint">${(ac.telemetryDays||0) > 0 ? `Archivos de más de ${ac.telemetryDays} días serán eliminados` : 'Pon un valor > 0 para activar'}</div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Skins descargadas</div>
+        <div class="ac-row">
+          <span class="ac-label">Borrar skins más antiguas de</span>
+          <div class="ac-days-input">
+            <input type="number" id="ac-paint-days" class="days-input" min="0" max="999" value="${ac.paintDays || 0}">
+            <span class="ac-days-unit">días</span>
+          </div>
+        </div>
+        <div class="ac-hint">${(ac.paintDays||0) > 0 ? `Skins de más de ${ac.paintDays} días serán eliminadas` : 'Pon un valor > 0 para activar'}</div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">Replays</div>
+        <div class="ac-row">
+          <span class="ac-label">Borrar replays más antiguos de</span>
+          <div class="ac-days-input">
+            <input type="number" id="ac-rep-days" class="days-input" min="0" max="999" value="${ac.replayDays || 0}">
+            <span class="ac-days-unit">días</span>
+          </div>
+        </div>
+        <div class="ac-hint">${(ac.replayDays||0) > 0 ? `Replays de más de ${ac.replayDays} días serán eliminados` : 'Pon un valor > 0 para activar'}</div>
+      </div>
+    </div>
+
+    <div id="ac-preview-section" class="card" hidden>
+      <div class="card-title">Previsualización — qué se borraría ahora</div>
+      <div id="ac-preview-content"></div>
+    </div>`;
+}
+
+async function saveAutoClean() {
+  const settings = await api.settings.get();
+  settings.autoClean = {
+    enabled:      eid('ac-enabled').checked,
+    telemetryDays: Math.max(0, parseInt(eid('ac-tel-days').value)   || 0),
+    paintDays:     Math.max(0, parseInt(eid('ac-paint-days').value) || 0),
+    replayDays:    Math.max(0, parseInt(eid('ac-rep-days').value)   || 0)
+  };
+  await api.settings.save(settings);
+  toast('Ajustes guardados', 'success');
+  return settings.autoClean;
+}
+
+async function previewAutoClean() {
+  const ac = await saveAutoClean();
+  const anyActive = ac.telemetryDays > 0 || ac.paintDays > 0 || ac.replayDays > 0;
+  if (!anyActive) { toast('Configura al menos un tipo con días > 0', 'info'); return; }
+  showProgress('Calculando…', '');
+  const preview = await api.autoclean.preview();
+  hideProgress();
+
+  const sec = eid('ac-preview-section');
+  const cnt = eid('ac-preview-content');
+  sec.hidden = false;
+
+  const telB  = preview.telemetry.reduce((s,f) => s+f.bytes, 0);
+  const paintB = preview.paint.reduce((s,f) => s+f.bytes, 0);
+  const repB  = preview.replays.reduce((s,f) => s+f.bytes, 0);
+  const total = preview.telemetry.length + preview.paint.length + preview.replays.length;
+
+  if (!total) {
+    cnt.innerHTML = `<div class="empty" style="padding:24px"><div class="empty-icon" style="font-size:24px">✓</div><div class="empty-text">Nada que limpiar con los ajustes actuales</div></div>`;
+    return;
+  }
+
+  cnt.innerHTML = `
+    <div class="ac-preview-stats">
+      ${preview.telemetry.length ? `<div class="ac-preview-item">
+        <span class="ac-preview-label">Telemetría</span>
+        <span class="ac-preview-count">${preview.telemetry.length} archivos</span>
+        <span class="ac-preview-size">${fmtB(telB)}</span>
+      </div>` : ''}
+      ${preview.paint.length ? `<div class="ac-preview-item">
+        <span class="ac-preview-label">Skins descargadas</span>
+        <span class="ac-preview-count">${preview.paint.length} archivos</span>
+        <span class="ac-preview-size">${fmtB(paintB)}</span>
+      </div>` : ''}
+      ${preview.replays.length ? `<div class="ac-preview-item">
+        <span class="ac-preview-label">Replays</span>
+        <span class="ac-preview-count">${preview.replays.length} archivos</span>
+        <span class="ac-preview-size">${fmtB(repB)}</span>
+      </div>` : ''}
+    </div>
+    <div class="ac-preview-total">
+      Total: <strong>${total.toLocaleString()} archivos · ${fmtB(telB + paintB + repB)}</strong> a eliminar
+    </div>`;
+}
+
+async function runAutoCleanNow() {
+  showProgress('Calculando…', '');
+  const preview = await api.autoclean.preview();
+  hideProgress();
+  const total = preview.telemetry.length + preview.paint.length + preview.replays.length;
+  if (!total) { toast('Nada que limpiar con los ajustes actuales', 'info'); return; }
+  const telB   = preview.telemetry.reduce((s,f) => s+f.bytes, 0);
+  const paintB = preview.paint.reduce((s,f) => s+f.bytes, 0);
+  const repB   = preview.replays.reduce((s,f) => s+f.bytes, 0);
+  if (!confirm(`¿Borrar ${total} archivos (${fmtB(telB+paintB+repB)})?\n\n• Telemetría: ${preview.telemetry.length}\n• Skins descargadas: ${preview.paint.length}\n• Replays: ${preview.replays.length}`)) return;
+  showProgress('Limpiando…', `${total} archivos`);
+  const results = await api.autoclean.run();
+  hideProgress();
+  let deleted = 0, bytes = 0;
+  for (const r of Object.values(results)) { deleted += r.deleted || 0; bytes += r.bytes || 0; }
+  toast(`✓ ${deleted} archivos · ${fmtB(bytes)} liberados`, 'success');
+  renderAutoClean();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INSTALL SCANNER
+// ═══════════════════════════════════════════════════════════════════════════════
+let installPath = null;
+let installActiveTab = 'cars';
+
+async function renderInstall() {
+  const el = eid('view-install');
+  el.innerHTML = loading('Buscando instalación de iRacing…');
+  const found = await api.install.find();
+  installPath = found.path;
+  if (!found.found) {
+    el.innerHTML = `
+      <div class="page-header">
+        <div><div class="page-title">Instalación</div><div class="page-subtitle">Contenido instalado en iRacing</div></div>
+      </div>
+      <div class="empty" style="flex:1">
+        <div class="empty-icon">💽</div>
+        <div class="empty-text">No se encontró la instalación de iRacing</div>
+        <button class="btn btn-primary" style="margin-top:16px" onclick="browseInstall()">Seleccionar carpeta…</button>
+      </div>`;
+    return;
+  }
+  renderInstallUI();
+}
+
+function renderInstallUI() {
+  const el = eid('view-install');
+  el.innerHTML = `
+    <div class="page-header">
+      <div><div class="page-title">Instalación</div><div class="page-subtitle">Contenido instalado en iRacing</div></div>
+      <div class="header-actions">
+        <button class="btn btn-ghost" onclick="browseInstall()">Cambiar ruta</button>
+        <button class="btn btn-ghost" onclick="api.install.open(installPath)">📂 Abrir</button>
+        <button class="btn btn-ghost" onclick="loadInstallTab(installActiveTab)">↻</button>
+      </div>
+    </div>
+
+    <div class="card" style="padding:12px 18px">
+      <div style="font-size:11px;font-family:monospace;color:var(--t2);word-break:break-all">${installPath}</div>
+    </div>
+
+    <div class="tab-bar">
+      <button class="tab-btn" id="tab-cars"   onclick="loadInstallTab('cars')">Coches</button>
+      <button class="tab-btn" id="tab-tracks" onclick="loadInstallTab('tracks')">Pistas</button>
+    </div>
+
+    <div class="table-wrap" id="install-table-wrap" style="flex:1">${loading('Escaneando…')}</div>`;
+
+  loadInstallTab(installActiveTab);
+}
+
+async function loadInstallTab(type) {
+  installActiveTab = type;
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.id === `tab-${type}`));
+  const wrap = eid('install-table-wrap');
+  if (!wrap) return;
+  wrap.innerHTML = loading(`Escaneando ${type === 'cars' ? 'coches' : 'pistas'}…`);
+
+  const items = await api.install.scan({ installPath, type });
+  const totalB = items.reduce((s,i) => s+i.bytes, 0);
+
+  if (!items.length) {
+    wrap.innerHTML = emptyState('📁', `No se encontró la carpeta "${type}" en la instalación`);
+    return;
+  }
+
+  wrap.innerHTML = `
+    <div class="toolbar" style="justify-content:space-between">
+      <span style="font-size:11px;color:var(--t2)">${items.length} ${type === 'cars' ? 'coches' : 'pistas'} instalados</span>
+      <span style="font-size:12px;font-weight:700;font-variant-numeric:tabular-nums">${fmtB(totalB)} total</span>
+    </div>
+    <div style="flex:1;overflow-y:auto">
+      ${items.map((item, i) => {
+        const pct = totalB > 0 ? item.bytes / totalB * 100 : 0;
+        return `
+          <div class="install-row" data-path="${installPath}\\${type}\\${item.id}" onclick="api.install.open(this.dataset.path)">
+            <div class="install-rank">${i+1}</div>
+            <div class="install-info">
+              <div class="install-name">${item.label}</div>
+              <div class="install-meta">${item.files.toLocaleString()} archivos</div>
+            </div>
+            <div class="install-bar-wrap">
+              <div class="install-bar" style="width:${pct.toFixed(1)}%"></div>
+            </div>
+            <div class="install-size">${fmtB(item.bytes)}</div>
+          </div>`;
+      }).join('')}
+    </div>`;
+}
+
+async function browseInstall() {
+  const p = await api.install.browse();
+  if (!p) return;
+  const r = await api.install.set(p);
+  if (r.ok) { installPath = p; renderInstallUI(); }
+  else toast('Ruta no válida', 'error');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SETUP COMPARE
+// ═══════════════════════════════════════════════════════════════════════════════
+function buildCompareOverlay() {
+  if (eid('compare-overlay')) return;
+  const d = document.createElement('div');
+  d.id = 'compare-overlay';
+  d.className = 'compare-overlay';
+  d.hidden = true;
+  d.innerHTML = `
+    <div class="compare-box">
+      <div class="compare-header">
+        <h3>⚖ Comparar Setups</h3>
+        <button class="btn btn-ghost btn-xs" onclick="closeCompare()">✕</button>
+      </div>
+      <div class="compare-body" id="compare-body"></div>
+    </div>`;
+  document.body.appendChild(d);
+}
+
+async function openSetupCompare() {
+  const names = [...document.querySelectorAll('.setup-row input:checked')].map(b => b.dataset.name);
+  if (names.length !== 2) return;
+  const overlay = eid('compare-overlay');
+  if (!overlay) return;
+  overlay.hidden = false;
+  eid('compare-body').innerHTML = loading('Leyendo archivos…');
+  const data = await api.setup.compare({ carId: selectedSetupCar, names });
+  renderCompareBody(data);
+}
+
+function renderCompareBody(data) {
+  const [a, b] = data;
+  const sizeDiff = a.size !== b.size;
+  const safeNote = (n) => (n || '').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  eid('compare-body').innerHTML = `
+    <div class="compare-cols">
+      <div class="compare-col">
+        <div class="compare-col-title">${a.fav ? '★ ' : ''}${a.name}</div>
+        <div class="compare-col-meta">
+          <div class="compare-meta-row"><span>Tamaño</span><span>${fmtB(a.size)}</span></div>
+          <div class="compare-meta-row"><span>Modificado</span><span>${fmtDate(a.mtime)}</span></div>
+        </div>
+        ${a.note ? `<div class="compare-note"><div class="compare-note-label">Nota guardada</div><div class="compare-note-text">${safeNote(a.note)}</div></div>` : '<div class="compare-note compare-note-empty"><div class="compare-note-label">Sin nota</div></div>'}
+        ${a.text ? `<div><div class="compare-note-label" style="margin-bottom:5px">Descripción del archivo</div><pre class="compare-pre">${a.text.substring(0,500)}</pre></div>` : ''}
+      </div>
+      <div class="compare-divider"></div>
+      <div class="compare-col">
+        <div class="compare-col-title">${b.fav ? '★ ' : ''}${b.name}</div>
+        <div class="compare-col-meta">
+          <div class="compare-meta-row"><span>Tamaño</span><span class="${sizeDiff ? 'diff-val' : ''}">${fmtB(b.size)}${sizeDiff ? ' ↕' : ''}</span></div>
+          <div class="compare-meta-row"><span>Modificado</span><span>${fmtDate(b.mtime)}</span></div>
+        </div>
+        ${b.note ? `<div class="compare-note"><div class="compare-note-label">Nota guardada</div><div class="compare-note-text">${safeNote(b.note)}</div></div>` : '<div class="compare-note compare-note-empty"><div class="compare-note-label">Sin nota</div></div>'}
+        ${b.text ? `<div><div class="compare-note-label" style="margin-bottom:5px">Descripción del archivo</div><pre class="compare-pre">${b.text.substring(0,500)}</pre></div>` : ''}
+      </div>
+    </div>
+    <div class="compare-actions">
+      <button class="btn btn-ghost btn-sm" onclick="closeCompare();openNoteEditor('${selectedSetupCar}','${a.name.replace(/'/g,"\\'")}','${safeNote(a.note).replace(/'/g,"\\'")}')">📝 Nota de A</button>
+      <button class="btn btn-ghost btn-sm" onclick="closeCompare();openNoteEditor('${selectedSetupCar}','${b.name.replace(/'/g,"\\'")}','${safeNote(b.note).replace(/'/g,"\\'")}')">📝 Nota de B</button>
+      <div style="flex:1"></div>
+      <div style="font-size:10px;color:var(--t3);align-self:center">Los .sto son binarios — compara visualmente en el simulador</div>
+    </div>`;
+}
+
+function closeCompare() {
+  const o = eid('compare-overlay');
+  if (o) o.hidden = true;
+}

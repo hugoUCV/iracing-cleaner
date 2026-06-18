@@ -330,6 +330,165 @@ ipcMain.on('win:minimize', () => win?.minimize());
 ipcMain.on('win:maximize', () => win?.isMaximized() ? win.unmaximize() : win.maximize());
 ipcMain.on('win:close', () => win?.close());
 
+// ── Settings ──────────────────────────────────────────────────────────────────
+function getSettings() { return loadJSON(ud('settings.json'), {}); }
+function saveSettings(s) { saveJSON(ud('settings.json'), s); }
+ipcMain.handle('settings:get', () => getSettings());
+ipcMain.handle('settings:save', (_, s) => { saveSettings(s); return true; });
+
+// ── Auto-cleanup ──────────────────────────────────────────────────────────────
+function computeAutoClean(ac) {
+  const now = Date.now();
+  const r = { telemetry: [], paint: [], replays: [] };
+
+  const telDays = Math.max(0, parseInt(ac.telemetryDays) || 0);
+  if (telDays > 0 && fs.existsSync(TELEMETRY_DIR)) {
+    const cut = now - telDays * 86400000;
+    try {
+      for (const e of fs.readdirSync(TELEMETRY_DIR, { withFileTypes: true })) {
+        if (!e.isFile() || !e.name.endsWith('.ibt')) continue;
+        try { const st = fs.statSync(path.join(TELEMETRY_DIR, e.name)); if (st.mtimeMs < cut) r.telemetry.push({ name: e.name, bytes: st.size, mtime: st.mtimeMs }); } catch {}
+      }
+    } catch {}
+  }
+
+  const paintDays = Math.max(0, parseInt(ac.paintDays) || 0);
+  if (paintDays > 0 && fs.existsSync(PAINT_DIR)) {
+    const cut = now - paintDays * 86400000;
+    try {
+      for (const car of fs.readdirSync(PAINT_DIR, { withFileTypes: true }).filter(e => e.isDirectory())) {
+        const cp = path.join(PAINT_DIR, car.name);
+        try {
+          for (const f of fs.readdirSync(cp, { withFileTypes: true }).filter(e => e.isFile())) {
+            if (isOwnPaint(f.name)) continue;
+            try { const st = fs.statSync(path.join(cp, f.name)); if (st.mtimeMs < cut) r.paint.push({ name: `${car.name}/${f.name}`, car: car.name, file: f.name, bytes: st.size, mtime: st.mtimeMs }); } catch {}
+          }
+        } catch {}
+      }
+    } catch {}
+  }
+
+  const repDays = Math.max(0, parseInt(ac.replayDays) || 0);
+  if (repDays > 0 && fs.existsSync(REPLAY_DIR)) {
+    const cut = now - repDays * 86400000;
+    try {
+      for (const e of fs.readdirSync(REPLAY_DIR, { withFileTypes: true })) {
+        if (!e.isFile()) continue;
+        try { const st = fs.statSync(path.join(REPLAY_DIR, e.name)); if (st.mtimeMs < cut) r.replays.push({ name: e.name, bytes: st.size, mtime: st.mtimeMs }); } catch {}
+      }
+    } catch {}
+  }
+
+  return r;
+}
+
+async function doAutoClean(preview) {
+  const res = {};
+  if (preview.telemetry.length) res.telemetry = deleteFiles(preview.telemetry.map(f => path.join(TELEMETRY_DIR, f.name)));
+  if (preview.paint.length)     res.paint     = deleteFiles(preview.paint.map(f => path.join(PAINT_DIR, f.car, f.file)));
+  if (preview.replays.length)   res.replays   = deleteFiles(preview.replays.map(f => path.join(REPLAY_DIR, f.name)));
+  return res;
+}
+
+ipcMain.handle('autoclean:preview', () => computeAutoClean(getSettings().autoClean || {}));
+ipcMain.handle('autoclean:run',     () => doAutoClean(computeAutoClean(getSettings().autoClean || {})));
+
+ipcMain.handle('autoclean:run-if-enabled', async () => {
+  const s = getSettings();
+  const ac = s.autoClean || {};
+  if (!ac.enabled) return null;
+  const today = new Date().toDateString();
+  if (s.lastAutoClean === today) return null;
+  const preview = computeAutoClean(ac);
+  const total = preview.telemetry.length + preview.paint.length + preview.replays.length;
+  if (!total) { saveSettings({ ...s, lastAutoClean: today }); return null; }
+  const results = await doAutoClean(preview);
+  saveSettings({ ...s, lastAutoClean: today });
+  return results;
+});
+
+// ── Setup compare ─────────────────────────────────────────────────────────────
+function extractEmbeddedText(buf) {
+  let result = '', run = '';
+  for (let i = 0; i + 1 < buf.length; i++) {
+    const lo = buf[i], hi = buf[i + 1];
+    if (lo >= 0x20 && lo < 0x7F && hi === 0x00) {
+      run += String.fromCharCode(lo); i++;
+    } else {
+      if (run.length >= 12 && /[a-zA-Z]{4}/.test(run)) result += (result ? '\n' : '') + run.trim();
+      run = '';
+    }
+  }
+  if (run.length >= 12 && /[a-zA-Z]{4}/.test(run)) result += (result ? '\n' : '') + run.trim();
+  return result.slice(0, 2000);
+}
+
+ipcMain.handle('setup:compare', (_, { carId, names }) => {
+  const notes = loadJSON(ud('setup-notes.json'));
+  const cn = notes[carId] || {};
+  return names.map(fname => {
+    const fp = path.join(SETUPS_DIR, carId, fname);
+    try {
+      const buf = fs.readFileSync(fp);
+      const st  = fs.statSync(fp);
+      return { name: fname, size: buf.length, mtime: st.mtimeMs, text: extractEmbeddedText(buf), note: cn[fname]?.note || '', fav: !!cn[fname]?.fav };
+    } catch(e) {
+      return { name: fname, size: 0, mtime: 0, text: '', note: cn[fname]?.note || '', fav: false, error: e.message };
+    }
+  });
+});
+
+// ── Install scanner ───────────────────────────────────────────────────────────
+ipcMain.handle('install:find', () => {
+  const s = getSettings();
+  if (s.iracingInstallPath && fs.existsSync(s.iracingInstallPath)) return { path: s.iracingInstallPath, found: true, source: 'saved' };
+
+  const common = ['C:\\iRacing','D:\\iRacing','E:\\iRacing','C:\\Program Files\\iRacing','C:\\Program Files (x86)\\iRacing'];
+  for (const p of common) {
+    if (fs.existsSync(path.join(p, 'iracingsim64DX11.exe'))) {
+      saveSettings({ ...getSettings(), iracingInstallPath: p });
+      return { path: p, found: true, source: 'auto' };
+    }
+  }
+
+  try {
+    const out = execSync(
+      'powershell -NoProfile -NonInteractive -Command "try{(Get-ItemProperty HKLM:\\SOFTWARE\\WOW6432Node\\iRacing.com\\iRacing -EA Stop).Path}catch{}"',
+      { timeout: 3000, encoding: 'utf8' }
+    ).trim();
+    if (out && fs.existsSync(out)) { saveSettings({ ...getSettings(), iracingInstallPath: out }); return { path: out, found: true, source: 'registry' }; }
+  } catch {}
+
+  return { path: null, found: false };
+});
+
+ipcMain.handle('install:set', (_, p) => {
+  if (fs.existsSync(p)) { saveSettings({ ...getSettings(), iracingInstallPath: p }); return { ok: true }; }
+  return { ok: false, error: 'Ruta no existe' };
+});
+
+ipcMain.handle('install:browse', async () => {
+  const result = await dialog.showOpenDialog(win, { properties: ['openDirectory'], title: 'Carpeta de instalación de iRacing', defaultPath: 'C:\\' });
+  if (result.canceled || !result.filePaths.length) return null;
+  return result.filePaths[0];
+});
+
+ipcMain.handle('install:scan', (_, { installPath, type }) => {
+  const dir = path.join(installPath, type);
+  if (!fs.existsSync(dir)) return [];
+  const items = [];
+  try {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (!e.isDirectory()) continue;
+      const { bytes, files } = dirStat(path.join(dir, e.name));
+      items.push({ id: e.name, label: carLabel(e.name), bytes, files });
+    }
+  } catch {}
+  return items.sort((a, b) => b.bytes - a.bytes);
+});
+
+ipcMain.handle('install:open', (_, p) => shell.openPath(p));
+
 // ── helpers privados ──────────────────────────────────────────────────────────
 function deleteFiles(paths) {
   const r = { deleted:0, bytes:0, errors:[] };
