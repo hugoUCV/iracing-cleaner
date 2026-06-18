@@ -568,21 +568,27 @@ function guessTrack(filename) {
 
 ipcMain.handle('iracing:login', async (_, { email, password }) => {
   try {
+    // Visita previa para establecer sesión (igual que un navegador real)
+    await net.fetch('https://members-ng.iracing.com/', { credentials: 'include' }).catch(() => {});
+
     const res = await net.fetch('https://members-ng.iracing.com/auth', {
       method: 'POST',
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password: irHashPw(email, password) })
     });
     const text = await res.text();
 
-    // net.fetch almacena cookies en el jar de sesión de Chromium automáticamente
+    // Diagnóstico: muestra headers para saber qué dice el servidor
+    const allow = res.headers.get('allow') || res.headers.get('Allow') || '—';
+
     const cookies = await session.defaultSession.cookies.get({
       url:  'https://members-ng.iracing.com',
       name: 'irsso_membersv3'
     });
 
     if (!cookies.length) {
-      let msg = `Sin cookie (HTTP ${res.status})`;
+      let msg = `Sin cookie (HTTP ${res.status}, Allow: ${allow})`;
       try {
         const j = JSON.parse(text);
         if (j.message) msg = j.message;
